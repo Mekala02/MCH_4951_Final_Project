@@ -4,7 +4,6 @@ Creates waypoints for writing letters on cardboard
 """
 
 import numpy as np
-from scipy.interpolate import interp1d
 
 
 class TrajectoryGenerator:

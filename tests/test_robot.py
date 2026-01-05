@@ -1,5 +1,9 @@
 """Quick test of robot_designer without GUI"""
 
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
 from robot_designer import RobotArm
 import numpy as np
 
@@ -13,7 +17,7 @@ print(f"Workspace max reach: {robot.get_workspace_bounds()['max_reach']:.2f}m")
 # Test FK with home position
 home_position = [0, 0, 0.3, 0]  # [base, shoulder, elbow, wrist]
 T = robot.forward_kinematics(home_position)
-end_pos = T[:3, 3]
+end_pos = T.t
 print(f"\nHome position end effector: [{end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_pos[2]:.3f}]")
 
 # Test IK
@@ -25,7 +29,7 @@ try:
 
     # Verify with FK
     T_verify = robot.forward_kinematics(ik_result)
-    reached_pos = T_verify[:3, 3]
+    reached_pos = T_verify.t
     print(f"Reached position: [{reached_pos[0]:.3f}, {reached_pos[1]:.3f}, {reached_pos[2]:.3f}]")
     error = np.linalg.norm(reached_pos - target)
     print(f"Position error: {error:.4f}m")

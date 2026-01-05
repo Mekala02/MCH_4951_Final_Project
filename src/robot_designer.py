@@ -28,13 +28,11 @@ class RobotArm:
     def _build_rtb_robot(self):
         """
         Build RTB robot for accurate dynamics calculations
-        Matching ikpy structure: Base_Rot_Z -> Shoulder_Rot_Y -> Elbow_Rot_Y -> Prismatic_X
         """
         # Get total lumped masses (link + motor)
         masses = self._get_total_masses()
 
         # Build RTB links using Elementary Transform Sequence (ETS)
-        # This is more flexible than DH and easier to match ikpy
         import roboticstoolbox as rtb
         from roboticstoolbox import ET
 
@@ -249,17 +247,27 @@ class RobotArm:
 
     def check_motor_limits(self, torques):
         """
-        Get maximum torques from simulation history
+        Check if torques exceed motor limits
 
         Args:
-            torque_history: list of torque arrays from simulation
+            torques: Array of torques to check [Nm]
 
         Returns:
-            Array of maximum absolute torques for each joint
+            tuple: (all_ok: bool, exceeded_list: list of dicts)
         """
-        torque_array = np.array(torque_history)
-        max_torques = np.max(np.abs(torque_array), axis=0)
-        return max_torques
+        joint_names = ['base', 'shoulder', 'elbow', 'wrist']
+        exceeded = []
+
+        for i, (joint_name, torque) in enumerate(zip(joint_names, torques)):
+            max_torque = self.config['motors'][joint_name]['stall_torque']
+            if abs(torque) > max_torque:
+                exceeded.append({
+                    'motor': joint_name,
+                    'required': abs(torque),
+                    'max': max_torque
+                })
+
+        return (len(exceeded) == 0, exceeded)
 
     def get_workspace_bounds(self):
         """Calculate approximate workspace bounds"""

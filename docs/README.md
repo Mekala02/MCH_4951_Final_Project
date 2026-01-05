@@ -5,7 +5,7 @@ A Python-based 4-DOF robot arm simulator that writes letters on a virtual cardbo
 ## Features
 
 - 4-DOF robot arm with real DH parameters
-- Forward and inverse kinematics (ikpy)
+- Forward and inverse kinematics (Robotics Toolbox)
 - Trajectory generation for letter writing
 - Static and dynamic torque calculations
 - Motor feasibility validation
@@ -114,8 +114,8 @@ Torque Analysis:
 
 ## Tech Stack
 
-- **ikpy**: Forward/inverse kinematics
-- **NumPy/SciPy**: Dynamics calculations, trajectory interpolation
+- **Robotics Toolbox**: Forward/inverse kinematics and dynamics
+- **NumPy/SciPy**: Numerical calculations and trajectory interpolation
 - **matplotlib**: 3D visualization and animation
 - **PyYAML**: Configuration management
 

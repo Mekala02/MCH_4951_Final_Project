@@ -1,8 +1,8 @@
 # Robot Arm Simulator - Project Plan
 
 ## Tech Stack
-- **ikpy**: Forward/inverse kinematics
-- **NumPy/SciPy**: Dynamics calculations, trajectory interpolation
+- **Robotics Toolbox**: Forward/inverse kinematics and dynamics
+- **NumPy/SciPy**: Numerical calculations and trajectory interpolation
 - **matplotlib**: 3D visualization and animation
 - **PyYAML**: Configuration management
 
@@ -28,7 +28,7 @@ project/
 - Calculate: reachability, static/dynamic torques, feasibility
 
 ## Development Phases
-1. Config + ikpy chain setup
+1. Config + robot setup
 2. FK/IK validation
 3. Letter trajectory generation
 4. Dynamics calculation (torques)
@@ -47,4 +47,4 @@ Always use venv Python:
 ```
 venv/Scripts/python.exe your_script.py
 ```
-All dependencies installed in venv (ikpy, numpy, scipy, pyyaml, matplotlib)
+All dependencies installed in venv (roboticstoolbox-python, spatialmath-python, numpy, scipy, pyyaml, matplotlib)

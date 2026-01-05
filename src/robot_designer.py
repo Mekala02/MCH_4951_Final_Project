@@ -56,13 +56,15 @@ class RobotArm:
         )
 
         # Link 2: Shoulder (revolute Y) - compact shoulder link
-        # Extends 0.25m along local X before the joint
+        # Extends 0.25m along local X before the joint, with 0.10m offset along Z
+        shoulder_length = self.config['robot']['links'][1]['a']
+        shoulder_offset = self.config['robot']['links'][1].get('offset', 0)
         L2 = rtb.Link(
-            ET.tx(0.25) * ET.Ry(),
+            ET.tx(shoulder_length) * ET.tz(shoulder_offset) * ET.Ry(),
             name="shoulder",
             m=masses[1],
-            r=[0.125, 0, 0],  # COM at middle of 0.25m link
-            I=self._compute_cylinder_inertia(masses[1], 0.025, 0.25),
+            r=[shoulder_length/2, 0, shoulder_offset/2],  # COM at middle of link + offset
+            I=self._compute_cylinder_inertia(masses[1], 0.025, shoulder_length),
             qlim=shoulder_limits  # -80° to +80° prevents collisions
         )
 

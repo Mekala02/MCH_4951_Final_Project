@@ -1,0 +1,5 @@
+ikpy
+numpy
+scipy
+pyyaml
+matplotlib

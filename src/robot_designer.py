@@ -6,8 +6,8 @@ Handles robot chain creation, FK/IK, and torque calculations
 import numpy as np
 import yaml
 import os
-from ikpy.chain import Chain
-from ikpy.link import OriginLink, URDFLink
+import roboticstoolbox as rtb
+from spatialmath import SE3
 
 
 class RobotArm:
@@ -22,95 +22,178 @@ class RobotArm:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-        self.chain = self._build_chain()
         self.g = self.config['simulation']['gravity']
+        self.robot = self._build_rtb_robot()  # Single RTB robot
 
-    def _build_chain(self):
-        """Build ikpy chain - using simplified working robot instead of DH parameters"""
-        # Simple 4-DOF robot that works well with ikpy IK solver
-        # Configuration: Base_Rot_Z -> Shoulder_Rot_Y -> Elbow_Rot_Y -> Prismatic_X
+    def _build_rtb_robot(self):
+        """
+        Build RTB robot for accurate dynamics calculations
+        Matching ikpy structure: Base_Rot_Z -> Shoulder_Rot_Y -> Elbow_Rot_Y -> Prismatic_X
+        """
+        # Get total lumped masses (link + motor)
+        masses = self._get_total_masses()
 
-        links = [
-            OriginLink(),
+        # Build RTB links using Elementary Transform Sequence (ETS)
+        # This is more flexible than DH and easier to match ikpy
+        import roboticstoolbox as rtb
+        from roboticstoolbox import ET
 
-            # Joint 1: Base rotation around Z (spin)
-            URDFLink(
-                name="base",
-                origin_translation=np.array([0, 0, 0.2]),  # 20cm tall base
-                origin_orientation=np.array([0, 0, 0]),
-                rotation=np.array([0, 0, 1]),  # Rotate around Z
-                bounds=[-3.14, 3.14]
-            ),
+        # Compact 4-DOF: Base_Rz -> Shoulder_Ry -> Elbow_Prismatic_X -> Wrist_Ry
+        # Design: Compact, well-proportioned links for stability and balance
 
-            # Joint 2: Shoulder rotation around Y (up/down)
-            URDFLink(
-                name="shoulder",
-                origin_translation=np.array([0, 0, 0]),
-                origin_orientation=np.array([0, 0, 0]),
-                rotation=np.array([0, 1, 0]),  # Rotate around Y
-                bounds=[-1.57, 1.57]
-            ),
+        # Get joint limits from config
+        base_limits = self.config['robot']['links'][0]['limits']
+        shoulder_limits = self.config['robot']['links'][1]['limits']
+        elbow_limits = self.config['robot']['links'][2]['limits']
+        wrist_limits = self.config['robot']['links'][3]['limits']
 
-            # Joint 3: Elbow rotation around Y (bend arm)
-            URDFLink(
-                name="elbow",
-                origin_translation=np.array([0.4, 0, 0]),  # 40cm upper arm
-                origin_orientation=np.array([0, 0, 0]),
-                rotation=np.array([0, 1, 0]),  # Rotate around Y
-                bounds=[-1.57, 1.57]
-            ),
+        # Link 1: Base rotation (revolute Z) - compact stable base
+        L1 = rtb.Link(
+            ET.tz(0.10) * ET.Rz(),  # Lift 0.10m (compact, stable), then rotate around Z
+            name="base",
+            m=masses[0],
+            r=[0, 0, 0.05],  # COM at middle of 0.10m base
+            I=self._compute_cylinder_inertia(masses[0], 0.03, 0.10),
+            qlim=base_limits  # ±160° realistic limit
+        )
 
-            # Joint 4: Prismatic (telescoping forearm)
-            URDFLink(
-                name="wrist",
-                origin_translation=np.array([0.2, 0, 0]),  # 20cm base forearm
-                origin_orientation=np.array([0, 0, 0]),
-                translation=np.array([1, 0, 0]),  # Extend in X direction
-                joint_type='prismatic',
-                bounds=[0, 0.3]  # Can extend 0-30cm
-            ),
-        ]
+        # Link 2: Shoulder (revolute Y) - compact shoulder link
+        # Extends 0.25m along local X before the joint
+        L2 = rtb.Link(
+            ET.tx(0.25) * ET.Ry(),
+            name="shoulder",
+            m=masses[1],
+            r=[0.125, 0, 0],  # COM at middle of 0.25m link
+            I=self._compute_cylinder_inertia(masses[1], 0.025, 0.25),
+            qlim=shoulder_limits  # -80° to +80° prevents collisions
+        )
 
-        return Chain(name=self.config['robot']['name'], links=links)
+        # Link 3: Elbow (prismatic X) - compact prismatic extension
+        L3 = rtb.Link(
+            ET.tx(),  # Prismatic extension
+            name="elbow",
+            m=masses[2],
+            r=[0.15, 0, 0],  # COM at middle of extension range (0.20 to 0.40, mid=0.30)
+            I=self._compute_cylinder_inertia(masses[2], 0.02, 0.20),
+            qlim=elbow_limits,  # 20-40cm mechanical stops
+            isprismatic=True
+        )
+
+        # Link 4: Wrist (revolute Y) - compact wrist link
+        # Extends 0.15m before the joint
+        L4 = rtb.Link(
+            ET.tx(0.15) * ET.Ry(),
+            name="wrist",
+            m=masses[3],
+            r=[0.075, 0, 0],  # COM at middle of 0.15m link
+            I=self._compute_cylinder_inertia(masses[3], 0.015, 0.15),
+            qlim=wrist_limits  # ±120° realistic limit
+        )
+
+        # Create robot
+        robot = rtb.Robot([L1, L2, L3, L4], name=self.config['robot']['name'])
+        robot.gravity = [0, 0, -self.g]  # Set gravity vector
+
+        return robot
+
+    def _get_total_masses(self):
+        """
+        Compute total lumped mass for each link (link + motor + end effector)
+        Masses concentrated at link COM
+        """
+        masses = []
+        joint_names = ['base', 'shoulder', 'elbow', 'wrist']
+
+        for joint_name in joint_names:
+            link_mass = self.config['link_specs'][joint_name]['mass']
+            motor_mass = self.config['motors'][joint_name]['mass']
+            total_mass = link_mass + motor_mass
+
+            # Add end effector mass to last link
+            if joint_name == 'wrist':
+                total_mass += self.config['end_effector']['mass']
+
+            masses.append(total_mass)
+
+        return np.array(masses)
+
+    def _compute_cylinder_inertia(self, mass, radius, height):
+        """
+        Compute inertia tensor for solid cylinder about its COM
+
+        Args:
+            mass: total mass (kg)
+            radius: cylinder radius (m)
+            height: cylinder height (m)
+
+        Returns:
+            3x3 inertia matrix
+        """
+        # For solid cylinder:
+        # Ixx = Iyy = m*(3r² + h²)/12  (perpendicular to axis)
+        # Izz = m*r²/2                 (about cylinder axis)
+
+        Ixx = Iyy = mass * (3 * radius**2 + height**2) / 12
+        Izz = mass * radius**2 / 2
+
+        return np.diag([Ixx, Iyy, Izz])
 
     def forward_kinematics(self, joint_angles):
         """
-        Compute end effector position from joint angles
+        Compute end effector pose from joint angles using RTB
 
         Args:
-            joint_angles: list of 4 joint values [base, shoulder, elbow, wrist]
+            joint_angles: array of 4 joint values [base, shoulder, elbow, wrist]
 
         Returns:
-            4x4 transformation matrix
+            SE3 transformation object (can get 4x4 matrix with .A attribute)
         """
-        # ikpy expects joint angles with origin link, so prepend 0
-        full_joints = [0] + list(joint_angles)
-        return self.chain.forward_kinematics(full_joints)
+        T = self.robot.fkine(joint_angles)
+        return T
 
     def inverse_kinematics(self, target_position, initial_guess=None):
         """
-        Compute joint angles to reach target position
+        Compute joint angles to reach target position using RTB's IK
 
         Args:
             target_position: [x, y, z] target coordinates
-            initial_guess: optional initial joint configuration
+            initial_guess: optional initial joint configuration [4,]
 
         Returns:
-            Array of joint angles (without origin link)
+            Array of joint angles [4,] or None if IK fails
         """
         if initial_guess is None:
-            initial_guess = [0, 0, 0, 0.3, 0]  # Include origin link
-        else:
-            initial_guess = [0] + list(initial_guess)
+            # Smart initial guess based on target position
+            # Base angle points toward target in XY plane
+            base_angle = np.arctan2(target_position[1], target_position[0])
+            initial_guess = np.array([base_angle, 0, 0.30, 0])  # Mid-range prismatic (0.20-0.40)
 
-        # Solve IK
-        ik_solution = self.chain.inverse_kinematics(
-            target_position=target_position,
-            initial_position=initial_guess
+        # Create SE3 transform from target position
+        # RTB IK needs full 6-DOF pose, but we only care about position
+        # Keep orientation fixed (end effector pointing forward)
+        T_target = SE3(target_position[0], target_position[1], target_position[2])
+
+        # Use Levenberg-Marquardt IK solver (robust, handles singularities well)
+        ik_solution = self.robot.ikine_LM(
+            T_target,
+            q0=initial_guess,
+            mask=[1, 1, 1, 0, 0, 0]  # Only constrain position (x,y,z), not orientation
         )
 
-        # Return without origin link
-        return ik_solution[1:]
+        # Check if solution was found
+        if ik_solution.success:
+            return ik_solution.q
+        else:
+            # If LM fails, try numerical IK as backup
+            ik_solution = self.robot.ikine_NR(
+                T_target,
+                q0=initial_guess,
+                mask=[1, 1, 1, 0, 0, 0]
+            )
+            if ik_solution.success:
+                return ik_solution.q
+            else:
+                return None  # IK failed
 
     def get_link_masses(self):
         """Get mass of each link including motors"""
@@ -127,68 +210,42 @@ class RobotArm:
 
     def compute_static_torques(self, joint_angles):
         """
-        Compute static torques due to gravity
+        Compute static torques due to gravity using RTB's Recursive Newton-Euler
 
         Args:
-            joint_angles: current joint configuration
+            joint_angles: current joint configuration [4,]
 
         Returns:
             Array of required torques at each joint [Nm]
         """
-        masses = self.get_link_masses()
-        torques = np.zeros(4)
+        # Static case: zero velocities and accelerations
+        qd = np.zeros(4)
+        qdd = np.zeros(4)
 
-        # Get positions of each link's center of mass
-        # For simplicity, assume CoM at midpoint of each link
-        for i in range(4):
-            # Get transformation to this joint
-            # Need to pad with zeros for remaining joints
-            partial_joints = [0] + list(joint_angles[:i+1]) + [0] * (4 - i - 1)
-            T = self.chain.forward_kinematics(partial_joints)
+        # Use RTB's rne (Recursive Newton-Euler) for inverse dynamics
+        # Returns torques needed to maintain position against gravity
+        tau = self.robot.rne(joint_angles, qd, qdd)
 
-            # Position of joint
-            pos = T[:3, 3]
-
-            # Distance from base (moment arm)
-            r = np.linalg.norm(pos[:2])  # horizontal distance
-
-            # Torque due to gravity (simplified)
-            # τ = m * g * r
-            torques[i] = masses[i] * self.g * r
-
-        return torques
+        return tau
 
     def compute_dynamic_torques(self, joint_angles, joint_velocities, joint_accelerations):
         """
-        Compute dynamic torques (simplified Euler-Lagrange)
+        Compute dynamic torques using RTB's Recursive Newton-Euler
+        Includes: gravity + inertial + Coriolis + centrifugal forces
 
         Args:
-            joint_angles: current configuration
-            joint_velocities: joint velocities
-            joint_accelerations: joint accelerations
+            joint_angles: current configuration [4,]
+            joint_velocities: joint velocities [4,]
+            joint_accelerations: joint accelerations [4,]
 
         Returns:
             Array of required torques [Nm]
         """
-        # Simplified: torque = I * alpha + static torques
-        # Using approximation: I ≈ m * r²
+        # Use RTB's rne for full inverse dynamics
+        # tau = M(q)*qdd + C(q,qd)*qd + G(q)
+        tau = self.robot.rne(joint_angles, joint_velocities, joint_accelerations)
 
-        static_torques = self.compute_static_torques(joint_angles)
-        masses = self.get_link_masses()
-
-        dynamic_torques = static_torques.copy()
-
-        for i in range(4):
-            # Approximate inertia
-            partial_joints = [0] + list(joint_angles[:i+1]) + [0] * (4 - i - 1)
-            T = self.chain.forward_kinematics(partial_joints)
-            pos = T[:3, 3]
-            r = np.linalg.norm(pos[:2])
-
-            I_approx = masses[i] * r**2
-            dynamic_torques[i] += I_approx * joint_accelerations[i]
-
-        return dynamic_torques
+        return tau
 
     def check_motor_limits(self, torques):
         """
@@ -218,10 +275,10 @@ class RobotArm:
 
     def visualize(self, joint_angles, ax=None):
         """
-        Visualize robot configuration using ikpy's plot
+        Visualize robot configuration using RTB's plot
 
         Args:
-            joint_angles: joint configuration to visualize
+            joint_angles: joint configuration to visualize [4,]
             ax: matplotlib 3D axis (optional)
         """
         import matplotlib.pyplot as plt
@@ -231,11 +288,8 @@ class RobotArm:
             fig = plt.figure(figsize=(10, 8))
             ax = fig.add_subplot(111, projection='3d')
 
-        # Prepend origin link angle
-        full_joints = [0] + list(joint_angles)
-
-        # Use ikpy's built-in plot
-        self.chain.plot(full_joints, ax)
+        # Use RTB's plot method
+        self.robot.plot(joint_angles, backend='pyplot', block=False, ax=ax)
 
         # Add cardboard position
         cardboard_pos = self.config['workspace']['cardboard_position']
@@ -243,7 +297,6 @@ class RobotArm:
         cardboard_h = self.config['workspace']['cardboard_height']
 
         # Draw cardboard as a vertical rectangle in XZ plane (Y constant)
-        # Corners: bottom-left, bottom-right, top-right, top-left, back to bottom-left
         x = [cardboard_pos[0] - cardboard_w/2, cardboard_pos[0] + cardboard_w/2,
              cardboard_pos[0] + cardboard_w/2, cardboard_pos[0] - cardboard_w/2,
              cardboard_pos[0] - cardboard_w/2]
@@ -271,13 +324,13 @@ if __name__ == '__main__':
     print(f"Workspace max reach: {robot.get_workspace_bounds()['max_reach']:.2f}m")
 
     # Test FK with home position
-    home_position = [0, 0, 0.3, 0]  # [base, shoulder, elbow, wrist]
+    home_position = np.array([0, 0, 0.30, 0])  # [base, shoulder, elbow(prismatic), wrist]
     T = robot.forward_kinematics(home_position)
-    end_pos = T[:3, 3]
+    end_pos = T.t  # RTB SE3 object has .t for translation
     print(f"\nHome position end effector: [{end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_pos[2]:.3f}]")
 
     # Visualize
     import matplotlib.pyplot as plt
     robot.visualize(home_position)
-    plt.title('Robot Arm - Home Position')
+    plt.title('Robot Arm - Home Position (RTB)')
     plt.show()

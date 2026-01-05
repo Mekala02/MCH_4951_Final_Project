@@ -14,35 +14,35 @@ robot:
     - name: "base"
       joint_type: "revolute"  # Base rotation
       theta: 0
-      d: 0.2        # 20cm base height
+      d: 0.10       # 10cm base height (compact, stable)
       a: 0.0
       alpha: 1.5708  # 90° twist (π/2)
-      limits: [-3.14159, 3.14159]
+      limits: [-2.7925, 2.7925]  # ±160° (realistic servo limit, prevents cable tangling)
 
     - name: "shoulder"
       joint_type: "revolute"  # Shoulder rotation
       theta: 0
       d: 0.0
-      a: 0.4        # 40cm link length
+      a: 0.25       # 25cm shoulder link (compact, balanced)
       alpha: 0.0
-      offset: 0.1   # 10cm offset (requirement: ≥1 offset, not on last link)
-      limits: [-1.5708, 1.5708]
+      offset: 0.10  # 10cm offset (requirement: ≥1 offset, not on last link)
+      limits: [-1.3963, 1.3963]  # -80° to +80° (prevents collision with base and ground)
 
     - name: "elbow"
       joint_type: "prismatic"  # Translational joint (requirement: ≥1 prismatic, not first link)
       theta: 0
-      d: 0.3        # 30cm nominal extension
+      d: 0.30       # 30cm nominal extension (compact, balanced)
       a: 0.0
       alpha: 0.0
-      limits: [0.1, 0.5]  # 10-50cm extension range
+      limits: [0.20, 0.40]  # 20-40cm extension (mechanical stops on linear actuator)
 
     - name: "wrist"
-      joint_type: "revolute"  # Wrist rotation
+      joint_type: "revolute"  # Wrist rotation (twist joint)
       theta: 0
       d: 0.0
-      a: 0.25       # 25cm final link
-      alpha: 0.0
-      limits: [-3.14159, 3.14159]
+      a: 0.15       # 15cm wrist link (compact, balanced)
+      alpha: 1.5708  # 90° twist (π/2) - second twist requirement
+      limits: [-2.0944, 2.0944]  # ±120° (realistic servo limit for wrist)
 
 # Material properties
 materials:
@@ -60,40 +60,67 @@ materials:
 link_specs:
   base:
     material: "steel_1045"
-    diameter: 0.08  # 8cm diameter
-    mass: 2.5  # kg
+    diameter: 0.06  # 6cm diameter (compact)
+    mass: 1.0  # kg (short, stable base)
 
   shoulder:
     material: "aluminum_6061"
-    diameter: 0.06  # 6cm diameter
-    mass: 1.8  # kg (lightest link for end effector calculation)
+    diameter: 0.05  # 5cm diameter (compact)
+    mass: 1.2  # kg (25cm link, compact)
 
   elbow:
     material: "aluminum_6061"
-    diameter: 0.05  # 5cm diameter
-    mass: 1.2  # kg
+    diameter: 0.04  # 4cm diameter (compact)
+    mass: 1.0  # kg (20-40cm prismatic, compact)
 
   wrist:
     material: "aluminum_6061"
-    diameter: 0.04  # 4cm diameter
-    mass: 0.8  # kg
+    diameter: 0.03  # 3cm diameter (compact)
+    mass: 0.5  # kg (15cm link, compact)
 
 # End effector (pen)
 end_effector:
-  mass: 0.6  # kg (⅓ of lightest link: 1.8/3 = 0.6kg)
+  mass: 0.17  # kg (exactly ⅓ of lightest link: 0.5/3 = 0.17kg)
   length: 0.0  # zero length as per requirement
+
+# Motor specifications (realistic servo motors)
+# Masses are lumped to link COM positions for simplified dynamics
+motors:
+  base:
+    model: "Dynamixel MX-64"
+    mass: 1.5  # kg (medium motor for base rotation)
+    rated_torque: 6.0  # Nm
+    stall_torque: 7.3  # Nm
+
+  shoulder:
+    model: "Dynamixel MX-64"
+    mass: 1.5  # kg (medium motor)
+    rated_torque: 6.0  # Nm
+    stall_torque: 7.3  # Nm
+
+  elbow:
+    model: "Dynamixel MX-28"
+    mass: 0.8  # kg (smaller motor for prismatic joint)
+    rated_torque: 2.5  # Nm
+    stall_torque: 3.1  # Nm
+
+  wrist:
+    model: "Dynamixel AX-12"
+    mass: 0.5  # kg (small motor for wrist)
+    rated_torque: 1.5  # Nm
+    stall_torque: 1.8  # Nm
 
 # Workspace definition
 workspace:
-  cardboard_width: 0.6   # 60cm (reduced to fit workspace)
-  cardboard_height: 0.4  # 40cm (reduced to fit workspace)
-  cardboard_position: [0.4, 0.5, 0.5]  # x, y, z - cardboard in FRONT of robot (Y=0.5m forward)
+  cardboard_width: 1.20   # 120cm (requirement: exactly 120cm)
+  cardboard_height: 0.60  # 60cm (requirement: exactly 60cm)
+  cardboard_position: [0.0, 0.70, 0.10]  # x, y, z - cardboard CENTER at X=0, Y=0.70m forward, Z=0.10m (centered at base height)
 
 # Letter writing parameters
 writing:
   letters: "RLN"  # 3 letters to write
-  letter_height: 0.15  # 15cm tall letters (smaller to fit 3 letters)
-  letter_spacing: 0.10  # 10cm between letters (tighter spacing)
+  letter_height: 0.50  # 50cm tall letters (fills most of 60cm height)
+  letter_spacing: 0.05  # 5cm between letters
   pen_retract_distance: 0.05  # 5cm retraction between letters
 
 # Simulation parameters

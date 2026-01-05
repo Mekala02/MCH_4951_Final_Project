@@ -1,5 +1,7 @@
-ikpy
+roboticstoolbox-python
+spatialmath-python
 numpy
 scipy
 pyyaml
 matplotlib
+ansitable

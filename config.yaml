@@ -1,0 +1,133 @@
+# Robot Arm Configuration
+# 4-DOF arm meeting MCH 4951 requirements
+
+robot:
+  name: "Letter Writer 4-DOF"
+  dof: 4
+
+  # DH Parameters: [theta, d, a, alpha]
+  # theta: joint angle (for revolute) or 0 (for prismatic)
+  # d: link offset along previous z (for prismatic joint variable)
+  # a: link length along x
+  # alpha: link twist
+  links:
+    - name: "base"
+      joint_type: "revolute"  # Base rotation
+      theta: 0
+      d: 0.2        # 20cm base height
+      a: 0.0
+      alpha: 1.5708  # 90° twist (π/2)
+      limits: [-3.14159, 3.14159]
+
+    - name: "shoulder"
+      joint_type: "revolute"  # Shoulder rotation
+      theta: 0
+      d: 0.0
+      a: 0.4        # 40cm link length
+      alpha: 0.0
+      offset: 0.1   # 10cm offset (requirement: ≥1 offset, not on last link)
+      limits: [-1.5708, 1.5708]
+
+    - name: "elbow"
+      joint_type: "prismatic"  # Translational joint (requirement: ≥1 prismatic, not first link)
+      theta: 0
+      d: 0.3        # 30cm nominal extension
+      a: 0.0
+      alpha: 0.0
+      limits: [0.1, 0.5]  # 10-50cm extension range
+
+    - name: "wrist"
+      joint_type: "revolute"  # Wrist rotation
+      theta: 0
+      d: 0.0
+      a: 0.25       # 25cm final link
+      alpha: 0.0
+      limits: [-3.14159, 3.14159]
+
+# Material properties
+materials:
+  aluminum_6061:
+    density: 2700  # kg/m³
+    cost_per_kg: 3.5  # USD
+    yield_strength: 276e6  # Pa
+
+  steel_1045:
+    density: 7850  # kg/m³
+    cost_per_kg: 1.2  # USD
+    yield_strength: 530e6  # Pa
+
+# Link physical properties
+link_specs:
+  base:
+    material: "steel_1045"
+    diameter: 0.08  # 8cm diameter
+    mass: 2.5  # kg
+
+  shoulder:
+    material: "aluminum_6061"
+    diameter: 0.06  # 6cm diameter
+    mass: 1.8  # kg (lightest link for end effector calculation)
+
+  elbow:
+    material: "aluminum_6061"
+    diameter: 0.05  # 5cm diameter
+    mass: 1.2  # kg
+
+  wrist:
+    material: "aluminum_6061"
+    diameter: 0.04  # 4cm diameter
+    mass: 0.8  # kg
+
+# End effector (pen)
+end_effector:
+  mass: 0.6  # kg (⅓ of lightest link: 1.8/3 = 0.6kg)
+  length: 0.0  # zero length as per requirement
+
+# Motor specifications (real Dynamixel servos)
+motors:
+  base_motor:
+    model: "Dynamixel MX-106"
+    max_torque: 10.0  # Nm
+    max_speed: 6.0  # rad/s
+    mass: 0.153  # kg
+    voltage: 12  # V
+
+  shoulder_motor:
+    model: "Dynamixel MX-64"
+    max_torque: 6.0  # Nm
+    max_speed: 6.32  # rad/s
+    mass: 0.135  # kg
+    voltage: 12  # V
+
+  elbow_motor:
+    model: "Dynamixel MX-28"
+    max_torque: 2.5  # Nm (for linear actuator)
+    max_speed: 5.0  # rad/s
+    mass: 0.072  # kg
+    voltage: 12  # V
+
+  wrist_motor:
+    model: "Dynamixel AX-12A"
+    max_torque: 1.5  # Nm
+    max_speed: 11.93  # rad/s
+    mass: 0.055  # kg
+    voltage: 12  # V
+
+# Workspace definition
+workspace:
+  cardboard_width: 0.6   # 60cm (reduced to fit workspace)
+  cardboard_height: 0.4  # 40cm (reduced to fit workspace)
+  cardboard_position: [0.4, 0.5, 0.5]  # x, y, z - cardboard in FRONT of robot (Y=0.5m forward)
+
+# Letter writing parameters
+writing:
+  letters: "RLN"  # 3 letters to write
+  letter_height: 0.15  # 15cm tall letters (smaller to fit 3 letters)
+  letter_spacing: 0.10  # 10cm between letters (tighter spacing)
+  pen_retract_distance: 0.05  # 5cm retraction between letters
+
+# Simulation parameters
+simulation:
+  gravity: 9.81  # m/s²
+  timestep: 0.01  # seconds
+  trajectory_points: 100  # points per letter

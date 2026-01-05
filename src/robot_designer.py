@@ -115,12 +115,10 @@ class RobotArm:
     def get_link_masses(self):
         """Get mass of each link including motors"""
         masses = []
-        motor_list = ['base_motor', 'shoulder_motor', 'elbow_motor', 'wrist_motor']
-
         for i, link_name in enumerate(['base', 'shoulder', 'elbow', 'wrist']):
             link_mass = self.config['link_specs'][link_name]['mass']
-            motor_mass = self.config['motors'][motor_list[i]]['mass']
-            masses.append(link_mass + motor_mass)
+            # Note: Motor mass should be added after motor selection
+            masses.append(link_mass)
 
         # Add end effector mass
         masses.append(self.config['end_effector']['mass'])
@@ -194,28 +192,17 @@ class RobotArm:
 
     def check_motor_limits(self, torques):
         """
-        Check if torques exceed motor limits
+        Get maximum torques from simulation history
 
         Args:
-            torques: array of torques at each joint
+            torque_history: list of torque arrays from simulation
 
         Returns:
-            (bool, list): (all_ok, exceeded_joints)
+            Array of maximum absolute torques for each joint
         """
-        motor_list = ['base_motor', 'shoulder_motor', 'elbow_motor', 'wrist_motor']
-        exceeded = []
-
-        for i, motor_name in enumerate(motor_list):
-            max_torque = self.config['motors'][motor_name]['max_torque']
-            if abs(torques[i]) > max_torque:
-                exceeded.append({
-                    'joint': i,
-                    'motor': motor_name,
-                    'required': torques[i],
-                    'max': max_torque
-                })
-
-        return len(exceeded) == 0, exceeded
+        torque_array = np.array(torque_history)
+        max_torques = np.max(np.abs(torque_array), axis=0)
+        return max_torques
 
     def get_workspace_bounds(self):
         """Calculate approximate workspace bounds"""

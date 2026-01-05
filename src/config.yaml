@@ -83,36 +83,6 @@ end_effector:
   mass: 0.6  # kg (⅓ of lightest link: 1.8/3 = 0.6kg)
   length: 0.0  # zero length as per requirement
 
-# Motor specifications (real Dynamixel servos)
-motors:
-  base_motor:
-    model: "Dynamixel MX-106"
-    max_torque: 10.0  # Nm
-    max_speed: 6.0  # rad/s
-    mass: 0.153  # kg
-    voltage: 12  # V
-
-  shoulder_motor:
-    model: "Dynamixel MX-64"
-    max_torque: 6.0  # Nm
-    max_speed: 6.32  # rad/s
-    mass: 0.135  # kg
-    voltage: 12  # V
-
-  elbow_motor:
-    model: "Dynamixel MX-28"
-    max_torque: 2.5  # Nm (for linear actuator)
-    max_speed: 5.0  # rad/s
-    mass: 0.072  # kg
-    voltage: 12  # V
-
-  wrist_motor:
-    model: "Dynamixel AX-12A"
-    max_torque: 1.5  # Nm
-    max_speed: 11.93  # rad/s
-    mass: 0.055  # kg
-    voltage: 12  # V
-
 # Workspace definition
 workspace:
   cardboard_width: 0.6   # 60cm (reduced to fit workspace)

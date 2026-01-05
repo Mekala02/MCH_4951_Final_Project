@@ -115,25 +115,16 @@ class RobotSimulator:
         print(f"Average IK error: {np.mean(ik_errors):.4f}m")
         print(f"Max IK error: {np.max(ik_errors):.4f}m")
 
-        print("\nTorque Analysis:")
+        print("\nTorque Requirements:")
         torque_array = np.array(torques)
-        motor_list = ['base_motor', 'shoulder_motor', 'elbow_motor', 'wrist_motor']
+        joint_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
 
-        violations = 0
-        for i, motor_name in enumerate(motor_list):
+        for i, joint_name in enumerate(joint_names):
             max_torque_req = np.max(np.abs(torque_array[:, i]))
-            max_torque_avail = self.config['motors'][motor_name]['max_torque']
-            status = "OK" if max_torque_req <= max_torque_avail else "EXCEEDED"
+            avg_torque_req = np.mean(np.abs(torque_array[:, i]))
+            print(f"  {joint_name}: Max {max_torque_req:.2f} Nm, Avg {avg_torque_req:.2f} Nm")
 
-            if status == "EXCEEDED":
-                violations += 1
-
-            print(f"  {motor_name}: max {max_torque_req:.2f} Nm / {max_torque_avail:.2f} Nm [{status}]")
-
-        if violations > 0:
-            print(f"\nWarning: {violations} motor(s) exceed torque limits!")
-        else:
-            print("\nAll motors within limits!")
+        print("\nUse these values to select appropriate motors (recommended: 1.5x-2x safety factor)")
 
         return self.trajectory
 
@@ -182,14 +173,8 @@ class RobotSimulator:
         # Trace storage
         trace_x, trace_y, trace_z = [], [], []
 
-        # Torque plot setup
-        motor_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
-        motor_limits = [
-            self.config['motors']['base_motor']['max_torque'],
-            self.config['motors']['shoulder_motor']['max_torque'],
-            self.config['motors']['elbow_motor']['max_torque'],
-            self.config['motors']['wrist_motor']['max_torque']
-        ]
+        # Joint names for display
+        joint_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
 
         def update(frame):
             ax.cla()
@@ -232,17 +217,10 @@ class RobotSimulator:
             current_torques = self.trajectory['torques'][frame]
             x_pos = np.arange(4)
 
-            bars = ax_torque.bar(x_pos, current_torques, alpha=0.7, label='Current')
-            ax_torque.bar(x_pos, motor_limits, alpha=0.3, color='red', label='Limit')
-
-            # Color bars red if exceeding
-            for i, (torque, limit) in enumerate(zip(current_torques, motor_limits)):
-                if abs(torque) > limit:
-                    bars[i].set_color('red')
+            ax_torque.bar(x_pos, current_torques, alpha=0.7, color='steelblue')
 
             ax_torque.set_xticks(x_pos)
-            ax_torque.set_xticklabels(motor_names)
-            ax_torque.legend()
+            ax_torque.set_xticklabels(joint_names)
             ax_torque.grid(True, alpha=0.3)
 
         anim = FuncAnimation(fig, update, frames=len(self.trajectory['joint_angles']),
@@ -294,15 +272,12 @@ class RobotSimulator:
         print(f"Average IK error: {np.mean(self.trajectory['ik_errors']):.4f}m")
         print(f"Max IK error: {np.max(self.trajectory['ik_errors']):.4f}m")
 
-        print(f"\n--- Motor Torques ---")
-        motor_list = ['base_motor', 'shoulder_motor', 'elbow_motor', 'wrist_motor']
-        for i, motor_name in enumerate(motor_list):
+        print(f"\n--- Joint Torque Requirements ---")
+        joint_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
+        for i, joint_name in enumerate(joint_names):
             max_req = np.max(np.abs(self.trajectory['torques'][:, i]))
-            max_avail = self.config['motors'][motor_name]['max_torque']
-            model = self.config['motors'][motor_name]['model']
-
-            status = "[OK]" if max_req <= max_avail else "[FAIL]"
-            print(f"{status} {model}: {max_req:.2f}/{max_avail:.2f} Nm")
+            avg_req = np.mean(np.abs(self.trajectory['torques'][:, i]))
+            print(f"{joint_name}: Max {max_req:.2f} Nm, Avg {avg_req:.2f} Nm")
 
         print("\n" + "="*60)
 

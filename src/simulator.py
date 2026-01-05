@@ -50,7 +50,8 @@ class RobotSimulator:
 
         # Generate end effector trajectory
         ee_traj = self.traj_gen.generate_trajectory(letters)
-        interp_traj = self.traj_gen.interpolate_trajectory(ee_traj, points_per_segment=5)  # Reduced for speed
+        points_per_segment = self.config['simulation']['interpolation_points']
+        interp_traj = self.traj_gen.interpolate_trajectory(ee_traj, points_per_segment=points_per_segment)
 
         # Solve IK for each waypoint
         joint_angles = []
@@ -58,18 +59,86 @@ class RobotSimulator:
         torques = []
         ik_errors = []
 
-        previous_joints = [0, 0, 0.30, 0]  # Initial guess: mid-range for prismatic joint (0.20-0.40)
+        # Initial guess: mid-range for prismatic joint
+        # Use len(links) not dof (6-DOF robot has 7 links with prismatic)
+        num_joints = len(self.config['robot']['links'])
+        previous_joints = np.zeros(num_joints)
+        for i, link in enumerate(self.config['robot']['links']):
+            if link['joint_type'] == 'prismatic':
+                limits = link['limits']
+                previous_joints[i] = (limits[0] + limits[1]) / 2
 
         print(f"Solving IK for {len(interp_traj['waypoints'])} waypoints...")
 
         for i, target in enumerate(interp_traj['waypoints']):
             try:
-                # Solve IK
+                # Solve IK with previous solution as initial guess
                 joints = self.robot.inverse_kinematics(target, initial_guess=previous_joints)
 
                 # Check if IK succeeded
                 if joints is None:
                     raise ValueError("IK solver did not converge")
+
+                # Check for large joint jumps (teleporting) and handle angle wrapping
+                max_step = self.config['ik']['max_joint_step']
+                if len(joint_angles) > 0:
+                    # Handle angle wrapping for revolute joints (e.g., -π to π wrapping)
+                    joints_unwrapped = joints.copy()
+                    for j, link in enumerate(self.config['robot']['links']):
+                        if link['joint_type'] != 'prismatic':
+                            # Check if wrapping around ±π would give smaller difference
+                            diff_raw = joints[j] - previous_joints[j]
+                            diff_wrapped_pos = (joints[j] + 2*np.pi) - previous_joints[j]
+                            diff_wrapped_neg = (joints[j] - 2*np.pi) - previous_joints[j]
+
+                            # Choose the angle that gives smallest absolute difference
+                            diffs = [diff_raw, diff_wrapped_pos, diff_wrapped_neg]
+                            abs_diffs = [abs(d) for d in diffs]
+                            min_idx = abs_diffs.index(min(abs_diffs))
+
+                            if min_idx == 1:
+                                joints_unwrapped[j] = joints[j] + 2*np.pi
+                            elif min_idx == 2:
+                                joints_unwrapped[j] = joints[j] - 2*np.pi
+
+                    # Now check for jumps with unwrapped angles
+                    joint_diff = np.abs(joints_unwrapped - previous_joints)
+
+                    if np.any(joint_diff > max_step):
+                        # Large jump detected - try smoother path with more intermediate steps
+                        best_joints = joints_unwrapped
+                        min_max_diff = np.max(joint_diff)
+
+                        # Try multiple intermediate waypoints
+                        for num_steps in [3, 5, 7]:
+                            temp_joints = previous_joints.copy()
+                            success = True
+
+                            for step in range(1, num_steps + 1):
+                                alpha = step / num_steps
+                                prev_target = interp_traj['waypoints'][i-1] if i > 0 else target
+                                interp_target = prev_target + alpha * (target - prev_target)
+
+                                step_joints = self.robot.inverse_kinematics(interp_target, initial_guess=temp_joints)
+
+                                if step_joints is None:
+                                    success = False
+                                    break
+
+                                temp_joints = step_joints
+
+                            if success:
+                                # Check if this path is smoother
+                                final_diff = np.max(np.abs(temp_joints - previous_joints))
+                                if final_diff < min_max_diff:
+                                    best_joints = temp_joints
+                                    min_max_diff = final_diff
+                                    if min_max_diff <= max_step:
+                                        break  # Found good solution
+
+                        joints = best_joints
+                    else:
+                        joints = joints_unwrapped
 
                 # Verify solution
                 T = self.robot.forward_kinematics(joints)
@@ -87,7 +156,8 @@ class RobotSimulator:
 
                 previous_joints = joints
 
-                if i % 50 == 0:
+                progress_interval = self.config['simulation']['progress_report_interval']
+                if i % progress_interval == 0:
                     print(f"  Progress: {i}/{len(interp_traj['waypoints'])}, IK error: {error:.4f}m")
 
             except Exception as e:
@@ -99,9 +169,17 @@ class RobotSimulator:
                     torques.append(torques[-1])
                     ik_errors.append(999)
                 else:
-                    joint_angles.append(np.array([0, 0, 0.30, 0]))
+                    # Default configuration for failed IK
+                    num_joints = len(self.config['robot']['links'])
+                    default_joints = np.zeros(num_joints)
+                    # Set prismatic joint to mid-range
+                    for i, link in enumerate(self.config['robot']['links']):
+                        if link['joint_type'] == 'prismatic':
+                            limits = link['limits']
+                            default_joints[i] = (limits[0] + limits[1]) / 2
+                    joint_angles.append(default_joints)
                     reached_positions.append(target)
-                    torques.append(np.zeros(4))
+                    torques.append(np.zeros(num_joints))
                     ik_errors.append(999)
 
         self.trajectory = {
@@ -121,7 +199,8 @@ class RobotSimulator:
 
         print("\nTorque Requirements:")
         torque_array = np.array(torques)
-        joint_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
+        # Get joint names dynamically from config
+        joint_names = [link['name'].capitalize() for link in self.config['robot']['links']]
 
         for i, joint_name in enumerate(joint_names):
             max_torque_req = np.max(np.abs(torque_array[:, i]))
@@ -132,19 +211,23 @@ class RobotSimulator:
 
         return self.trajectory
 
-    def animate(self, save_path=None, interval=50, show_trace=True):
+    def animate(self, save_path=None, interval=None, show_trace=True):
         """
         Animate the robot trajectory
 
         Args:
             save_path: Optional path to save animation (e.g., 'animation.gif')
-            interval: Milliseconds between frames
+            interval: Milliseconds between frames (if None, uses config value)
             show_trace: Show pen trace
         """
+        if interval is None:
+            interval = self.config['visualization']['animation_interval']
         if self.trajectory is None:
             raise ValueError("No trajectory generated. Call generate_robot_trajectory() first.")
 
-        fig = plt.figure(figsize=(14, 8))
+        fig_width = self.config['visualization']['figure_width']
+        fig_height = self.config['visualization']['figure_height']
+        fig = plt.figure(figsize=(fig_width, fig_height))
         ax = fig.add_subplot(121, projection='3d')
         ax_torque = fig.add_subplot(122)
 
@@ -154,10 +237,13 @@ class RobotSimulator:
         ax.set_zlabel('Z (m)')
         ax.set_title('Robot Arm Animation')
 
-        # Set fixed limits
-        ax.set_xlim(-0.5, 1.5)
-        ax.set_ylim(-0.5, 0.5)
-        ax.set_zlim(0, 1.5)
+        # Set fixed limits from config
+        x_lim = self.config['visualization']['x_limits']
+        y_lim = self.config['visualization']['y_limits']
+        z_lim = self.config['visualization']['z_limits']
+        ax.set_xlim(x_lim[0], x_lim[1])
+        ax.set_ylim(y_lim[0], y_lim[1])
+        ax.set_zlim(z_lim[0], z_lim[1])
 
         # Draw cardboard
         cardboard_pos = self.config['workspace']['cardboard_position']
@@ -178,8 +264,10 @@ class RobotSimulator:
         trace_x, trace_y, trace_z = [], [], []
 
         # Joint names for display
-        joint_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
-        colors = ['steelblue', 'orange', 'green', 'red']
+        # Get joint names dynamically from config
+        num_joints = self.config['robot']['dof']
+        joint_names = [link['name'].capitalize() for link in self.config['robot']['links']]
+        torque_colors = self.config['visualization']['torque_line_colors']
 
         # Time array for torque plot
         time_array = np.arange(len(self.trajectory['joint_angles'])) * self.config['simulation']['timestep']
@@ -190,9 +278,9 @@ class RobotSimulator:
             ax.set_ylabel('Y (m)')
             ax.set_zlabel('Z (m)')
             ax.set_title(f'Robot Arm - Frame {frame}/{len(self.trajectory["joint_angles"])}')
-            ax.set_xlim(-0.5, 1.5)
-            ax.set_ylim(-0.5, 0.5)
-            ax.set_zlim(0, 1.5)
+            ax.set_xlim(x_lim[0], x_lim[1])
+            ax.set_ylim(y_lim[0], y_lim[1])
+            ax.set_zlim(z_lim[0], z_lim[1])
 
             # Draw cardboard
             ax.plot(x_card, y_card, z_card, 'r-', linewidth=2, alpha=0.5)
@@ -200,114 +288,90 @@ class RobotSimulator:
             # Get current joint configuration
             joints = self.trajectory['joint_angles'][frame]
 
-            # Draw robot - get all link/joint positions
-            # Base
-            base_pos = np.array([0, 0, 0])
-
-            # Calculate joint positions manually using ETS transforms
-            # This ensures we get the correct intermediate positions
+            # Draw robot - manually compute link positions from config
+            # Must match exact ETS from robot_designer.py
             from spatialmath import SE3
 
-            # Start at origin
-            T_accum = SE3()
-
-            # Link 0 (base): tz(0.10) * Rz(joints[0])
-            T_accum = T_accum * SE3.Tz(0.10) * SE3.Rz(joints[0])
-            T1 = T_accum  # Save transform for axis visualization
-            j1_pos = T_accum.t
-
-            # Link 1 (shoulder): tx(0.25) * Ry(joints[1])
-            T_accum = T_accum * SE3.Tx(0.25) * SE3.Ry(joints[1])
-            T2 = T_accum  # Save transform for axis visualization
-            j2_pos = T_accum.t
-
-            # Link 2 (elbow): tx(joints[2]) [prismatic]
-            T_accum = T_accum * SE3.Tx(joints[2])
-            T3 = T_accum  # Save transform for axis visualization
-            j3_pos = T_accum.t
-
-            # Link 3 (wrist): tx(0.15) * Ry(joints[3])
-            T_accum = T_accum * SE3.Tx(0.15) * SE3.Ry(joints[3])
-            T_ee = T_accum  # Save transform for axis visualization
-            ee_pos = T_accum.t
-
-            # Draw links as thick lines
-            # Get joint names and types from config for dynamic labels
             link_configs = self.config['robot']['links']
 
-            # Base to joint 1
-            link0_name = link_configs[0]['name'].capitalize()
-            link0_type = link_configs[0]['joint_type'].capitalize()
-            # Get rotation axis from alpha
-            if abs(link_configs[0].get('alpha', 0) - 1.5708) < 0.01:  # π/2
-                axis = ' Z' if link_configs[0]['d'] > 0 else ' Y'
-            else:
-                axis = ' Z'
-            ax.plot([base_pos[0], j1_pos[0]], [base_pos[1], j1_pos[1]], [base_pos[2], j1_pos[2]],
-                   'o-', linewidth=8, markersize=10, color='darkblue',
-                   label=f'{link0_name} ({link0_type}{axis})')
+            # Compute each link transform (matching robot_designer.py ETS exactly)
+            link_positions = [np.array([0, 0, 0])]  # Base at origin
+            T = SE3()  # Start at world origin
 
-            # Joint 1 to joint 2
-            link1_name = link_configs[1]['name'].capitalize()
-            link1_type = link_configs[1]['joint_type'].capitalize()
-            ax.plot([j1_pos[0], j2_pos[0]], [j1_pos[1], j2_pos[1]], [j1_pos[2], j2_pos[2]],
-                   'o-', linewidth=6, markersize=8, color='green',
-                   label=f'{link1_name} ({link1_type} Y)')
+            # Build transforms dynamically - matches robot_designer.py exactly
+            for i, link_cfg in enumerate(link_configs):
+                # Fixed translations (before rotation)
+                if link_cfg.get('d', 0) != 0:
+                    T = T * SE3.Tz(link_cfg['d'])
+                if link_cfg.get('a', 0) != 0:
+                    T = T * SE3.Tx(link_cfg['a'])
 
-            # Joint 2 to joint 3
-            link2_name = link_configs[2]['name'].capitalize()
-            link2_type = link_configs[2]['joint_type'].capitalize()
-            ax.plot([j2_pos[0], j3_pos[0]], [j2_pos[1], j3_pos[1]], [j2_pos[2], j3_pos[2]],
-                   'o-', linewidth=5, markersize=7, color='orange',
-                   label=f'{link2_name} ({link2_type} X)')
+                # Offset (if specified)
+                if 'offset' in link_cfg and link_cfg['offset'] != 0:
+                    T = T * SE3.Tz(link_cfg['offset'])
 
-            # Joint 3 to end effector
-            link3_name = link_configs[3]['name'].capitalize()
-            link3_type = link_configs[3]['joint_type'].capitalize()
-            ax.plot([j3_pos[0], ee_pos[0]], [j3_pos[1], ee_pos[1]], [j3_pos[2], ee_pos[2]],
-                   'o-', linewidth=4, markersize=6, color='red',
-                   label=f'{link3_name} ({link3_type} Y)')
+                # Fixed rotation (alpha - twist)
+                if link_cfg.get('alpha', 0) != 0:
+                    T = T * SE3.Rx(link_cfg['alpha'])
 
-            # Draw joint axes to show rotation directions
-            axis_length = 0.1
+                # Variable joint (MUST BE LAST)
+                is_prismatic = (link_cfg['joint_type'] == 'prismatic')
+                if is_prismatic:
+                    T = T * SE3.Tx(joints[i])  # Prismatic extension
+                else:
+                    # Determine rotation axis
+                    if 'Ry' in str(link_cfg.get('joint_type', '')):
+                        T = T * SE3.Ry(joints[i])
+                    elif 'Rx' in str(link_cfg.get('joint_type', '')):
+                        T = T * SE3.Rx(joints[i])
+                    else:
+                        T = T * SE3.Rz(joints[i])  # Default
 
-            # Base rotation axis (Z)
-            ax.quiver(j1_pos[0], j1_pos[1], j1_pos[2], 0, 0, axis_length,
-                     color='blue', arrow_length_ratio=0.3, linewidth=2, alpha=0.6)
+                link_positions.append(T.t)
 
-            # Shoulder rotation axis (Y)
-            # Get orientation from transform
-            R2 = T2.R
-            y_axis = R2 @ np.array([0, 1, 0])
-            ax.quiver(j2_pos[0], j2_pos[1], j2_pos[2],
-                     y_axis[0]*axis_length, y_axis[1]*axis_length, y_axis[2]*axis_length,
-                     color='green', arrow_length_ratio=0.3, linewidth=2, alpha=0.6)
+            # Draw links using config visualization settings
+            link_colors = self.config['visualization']['link_colors']
+            base_lw = self.config['visualization']['base_linewidth']
+            lw_decr = self.config['visualization']['linewidth_decrement']
+            min_lw = self.config['visualization']['min_linewidth']
+            marker_sz = self.config['visualization']['marker_size']
 
-            # Elbow prismatic extension direction (X)
-            R2_elbow = T2.R
-            x_axis_elbow = R2_elbow @ np.array([1, 0, 0])
-            ax.quiver(j2_pos[0], j2_pos[1], j2_pos[2],
-                     x_axis_elbow[0]*axis_length, x_axis_elbow[1]*axis_length, x_axis_elbow[2]*axis_length,
-                     color='orange', arrow_length_ratio=0.3, linewidth=2, alpha=0.6)
+            for i in range(len(link_positions) - 1):
+                p1 = link_positions[i]
+                p2 = link_positions[i+1]
 
-            # Wrist rotation axis (Y)
-            R3 = T3.R
-            y_axis_wrist = R3 @ np.array([0, 1, 0])
-            ax.quiver(j3_pos[0], j3_pos[1], j3_pos[2],
-                     y_axis_wrist[0]*axis_length, y_axis_wrist[1]*axis_length, y_axis_wrist[2]*axis_length,
-                     color='red', arrow_length_ratio=0.3, linewidth=2, alpha=0.6)
+                if i < len(link_configs):
+                    link_name = link_configs[i]['name'].capitalize()
+                    link_type = link_configs[i]['joint_type'].capitalize()
+                    color = link_colors[i % len(link_colors)]
+                    linewidth = max(base_lw - i * lw_decr, min_lw)
 
-            # Add trace
-            if show_trace and self.trajectory['pen_states'][frame]:
+                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                           'o-', linewidth=linewidth, markersize=marker_sz, color=color,
+                           label=f'{link_name} ({link_type})')
+
+            # End effector position
+            ee_pos = link_positions[-1]
+
+            # Show pen state with colored marker
+            pen_is_down = self.trajectory['pen_states'][frame]
+            pen_color = 'red' if pen_is_down else 'green'
+            pen_label = 'Pen DOWN (writing)' if pen_is_down else 'Pen UP (moving)'
+            ax.scatter([ee_pos[0]], [ee_pos[1]], [ee_pos[2]],
+                      c=pen_color, s=150, marker='v' if pen_is_down else '^',
+                      edgecolors='black', linewidths=2, label=pen_label, zorder=10)
+
+            # Add trace only when pen is down
+            if show_trace and pen_is_down:
                 pos = self.trajectory['reached_positions'][frame]
                 trace_x.append(pos[0])
                 trace_y.append(pos[1])
                 trace_z.append(pos[2])
 
             if len(trace_x) > 0:
-                ax.plot(trace_x, trace_y, trace_z, 'b-', linewidth=2, label='Pen trace')
+                ax.plot(trace_x, trace_y, trace_z, 'b-', linewidth=3, label='Pen trace (drawn letters)')
 
-            ax.legend()
+            ax.legend(loc='upper left', fontsize=8)
 
             # Update torque plot - show torque history over time
             ax_torque.cla()
@@ -316,10 +380,10 @@ class RobotSimulator:
             ax_torque.set_ylabel('Torque (Nm)')
 
             # Plot torque history up to current frame for each joint
-            for i in range(4):
+            for i in range(len(joint_names)):
                 torque_history = self.trajectory['torques'][:frame+1, i]
                 ax_torque.plot(time_array[:frame+1], torque_history,
-                             color=colors[i], label=joint_names[i], linewidth=2)
+                             color=torque_colors[i % len(torque_colors)], label=joint_names[i], linewidth=2)
 
             ax_torque.legend(loc='upper right')
             ax_torque.grid(True, alpha=0.3)
@@ -327,14 +391,16 @@ class RobotSimulator:
 
             # Set y-limits based on max torques
             max_torque = np.max(np.abs(self.trajectory['torques']))
-            ax_torque.set_ylim(-max_torque * 1.1, max_torque * 1.1)
+            torque_margin = self.config['visualization']['torque_plot_margin']
+            ax_torque.set_ylim(-max_torque * torque_margin, max_torque * torque_margin)
 
         anim = FuncAnimation(fig, update, frames=len(self.trajectory['joint_angles']),
                            interval=interval, repeat=False)  # Don't loop - stop when done
 
         if save_path:
             print(f"Saving animation to {save_path}...")
-            anim.save(save_path, writer='pillow', fps=20)
+            fps = self.config['visualization']['animation_fps']
+            anim.save(save_path, writer='pillow', fps=fps)
             print("Animation saved!")
 
         plt.tight_layout()
@@ -379,7 +445,9 @@ class RobotSimulator:
         print(f"Max IK error: {np.max(self.trajectory['ik_errors']):.4f}m")
 
         print(f"\n--- Joint Torque Requirements ---")
-        joint_names = ['Base', 'Shoulder', 'Elbow', 'Wrist']
+        # Get joint names dynamically from config
+        num_joints = self.config['robot']['dof']
+        joint_names = [link['name'].capitalize() for link in self.config['robot']['links']]
         for i, joint_name in enumerate(joint_names):
             max_req = np.max(np.abs(self.trajectory['torques'][:, i]))
             avg_req = np.mean(np.abs(self.trajectory['torques'][:, i]))

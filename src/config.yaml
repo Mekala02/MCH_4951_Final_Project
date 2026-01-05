@@ -1,130 +1,156 @@
 # Robot Arm Configuration
-# 4-DOF arm meeting MCH 4951 requirements
+# Simple 4-DOF arm meeting MCH 4951 requirements
 
 robot:
   name: "Letter Writer 4-DOF"
   dof: 4
 
-  # DH Parameters: [theta, d, a, alpha]
-  # theta: joint angle (for revolute) or 0 (for prismatic)
-  # d: link offset along previous z (for prismatic joint variable)
-  # a: link length along x
-  # alpha: link twist
+  # Complete link specifications (DH parameters + physical properties)
+  # Architecture: Base(Rz) -> Shoulder(Ry) -> Elbow(Ry) -> Wrist(Prismatic)
   links:
     - name: "base"
-      joint_type: "revolute"  # Base rotation
+      joint_type: "revolute"  # Base rotation (Rz) - revolute requirement
+      # DH Parameters
       theta: 0
-      d: 0.10       # 10cm base height (compact, stable)
+      d: 0.15       # 15cm base height
       a: 0.0
-      alpha: 1.5708  # 90° twist (π/2)
-      limits: [-2.7925, 2.7925]  # ±160° (realistic servo limit, prevents cable tangling)
+      alpha: 1.5708 # 90° twist - twist requirement (Rz becomes rotation in XY plane, next joint is pitch)
+      limits: [-3.14, 3.14]  # ±180° full rotation
+      # Physical Properties
+      material: "steel_1045"
+      diameter: 0.06  # 6cm diameter
+      mass: 1.0  # kg (link only)
+      # Motor Specifications (design requirements)
+      motor:
+        mass: 3.0  # kg
+        stall_torque: 100.0  # Nm (base carries full arm weight)
 
     - name: "shoulder"
-      joint_type: "revolute"  # Shoulder rotation
+      joint_type: "revolute"  # Shoulder pitch (Ry) - revolute requirement
+      # DH Parameters
       theta: 0
-      d: 0.0
-      a: 0.25       # 25cm shoulder link (compact, balanced)
+      d: -0.45       # -45cm shoulder offset (after base twist, -Z becomes +Y forward reach!)
+      a: 0.30       # 30cm shoulder link (increased for more reach)
       alpha: 0.0
-      offset: 0.10  # 10cm offset (requirement: ≥1 offset, not on last link)
-      limits: [-1.3963, 1.3963]  # -80° to +80° (prevents collision with base and ground)
+      offset: -0.10  # -10cm offset - offset requirement (after twist, -Z becomes +Y)
+      limits: [-1.57, 1.57]  # -90° to +90°
+      # Physical Properties
+      material: "aluminum_6061"
+      diameter: 0.04  # 4cm diameter (lighter)
+      mass: 0.8  # kg (link only, lighter)
+      # Motor Specifications (design requirements)
+      motor:
+        mass: 2.0  # kg
+        stall_torque: 50.0  # Nm
 
     - name: "elbow"
-      joint_type: "prismatic"  # Translational joint (requirement: ≥1 prismatic, not first link)
-      theta: 0
-      d: 0.30       # 30cm nominal extension (compact, balanced)
-      a: 0.0
-      alpha: 0.0
-      limits: [0.20, 0.40]  # 20-40cm extension (mechanical stops on linear actuator)
-
-    - name: "wrist"
-      joint_type: "revolute"  # Wrist rotation (twist joint)
+      joint_type: "revolute"  # Elbow pitch (Ry)
+      # DH Parameters
       theta: 0
       d: 0.0
-      a: 0.15       # 15cm wrist link (compact, balanced)
-      alpha: 1.5708  # 90° twist (π/2) - second twist requirement
-      limits: [-2.0944, 2.0944]  # ±120° (realistic servo limit for wrist)
+      a: 0.35       # 35cm elbow link (increased for more reach)
+      alpha: 0.0
+      limits: [-2.09, 0.35]  # -120° to +20° (realistic elbow)
+      # Physical Properties
+      material: "aluminum_6061"
+      diameter: 0.03  # 3cm diameter (lighter)
+      mass: 0.6  # kg (link only, lighter)
+      # Motor Specifications (design requirements)
+      motor:
+        mass: 1.5  # kg
+        stall_torque: 40.0  # Nm
 
-# Material properties
+    - name: "wrist_extend"
+      joint_type: "prismatic"  # Wrist extension - translational requirement (not first link)
+      # DH Parameters
+      theta: 0
+      d: 0.0
+      a: 0.10       # 10cm nominal + extension
+      alpha: 0.0
+      limits: [0.0, 0.20]  # 0-20cm extension for reach
+      # Physical Properties
+      material: "aluminum_6061"
+      diameter: 0.02  # 2cm diameter (lighter)
+      mass: 0.3  # kg (link only, lighter)
+      # Motor Specifications (design requirements)
+      motor:
+        mass: 1.0  # kg
+        stall_torque: 20.0  # Nm
+
+# Material properties database (for reference)
 materials:
   aluminum_6061:
     density: 2700  # kg/m³
     cost_per_kg: 3.5  # USD
     yield_strength: 276e6  # Pa
 
+  carbon_fiber:
+    density: 1600  # kg/m³
+    cost_per_kg: 25.0  # USD
+    yield_strength: 600e6  # Pa
+
   steel_1045:
     density: 7850  # kg/m³
     cost_per_kg: 1.2  # USD
     yield_strength: 530e6  # Pa
 
-# Link physical properties
-link_specs:
-  base:
-    material: "steel_1045"
-    diameter: 0.06  # 6cm diameter (compact)
-    mass: 1.0  # kg (short, stable base)
-
-  shoulder:
-    material: "aluminum_6061"
-    diameter: 0.05  # 5cm diameter (compact)
-    mass: 1.2  # kg (25cm link, compact)
-
-  elbow:
-    material: "aluminum_6061"
-    diameter: 0.04  # 4cm diameter (compact)
-    mass: 1.0  # kg (20-40cm prismatic, compact)
-
-  wrist:
-    material: "aluminum_6061"
-    diameter: 0.03  # 3cm diameter (compact)
-    mass: 0.5  # kg (15cm link, compact)
-
 # End effector (pen)
 end_effector:
-  mass: 0.17  # kg (exactly ⅓ of lightest link: 0.5/3 = 0.17kg)
+  mass: 0.07  # kg (exactly ⅓ of lightest link: 0.2/3 ≈ 0.07kg)
   length: 0.0  # zero length as per requirement
-
-# Motor specifications (realistic servo motors)
-# Masses are lumped to link COM positions for simplified dynamics
-motors:
-  base:
-    model: "Dynamixel MX-64"
-    mass: 1.5  # kg (medium motor for base rotation)
-    rated_torque: 6.0  # Nm
-    stall_torque: 7.3  # Nm
-
-  shoulder:
-    model: "Dynamixel MX-64"
-    mass: 1.5  # kg (medium motor)
-    rated_torque: 6.0  # Nm
-    stall_torque: 7.3  # Nm
-
-  elbow:
-    model: "Dynamixel MX-28"
-    mass: 0.8  # kg (smaller motor for prismatic joint)
-    rated_torque: 2.5  # Nm
-    stall_torque: 3.1  # Nm
-
-  wrist:
-    model: "Dynamixel AX-12"
-    mass: 0.5  # kg (small motor for wrist)
-    rated_torque: 1.5  # Nm
-    stall_torque: 1.8  # Nm
 
 # Workspace definition
 workspace:
   cardboard_width: 1.20   # 120cm (requirement: exactly 120cm)
   cardboard_height: 0.60  # 60cm (requirement: exactly 60cm)
-  cardboard_position: [0.0, 0.70, 0.10]  # x, y, z - cardboard CENTER at X=0, Y=0.70m forward, Z=0.10m (centered at base height)
+  cardboard_position: [0.0, 0.55, 0.70]  # x, y, z - cardboard CENTER at X=0, Y=0.55m, Z=0.70m (spans 0.40-1.00m)
 
 # Letter writing parameters
 writing:
   letters: "RLN"  # 3 letters to write
-  letter_height: 0.50  # 50cm tall letters (fills most of 60cm height)
+  letter_height: 0.48  # 48cm tall letters (slightly smaller for better reachability)
+  letter_width_ratio: 0.6  # Letter width as ratio of height (60% of height)
   letter_spacing: 0.05  # 5cm between letters
-  pen_retract_distance: 0.05  # 5cm retraction between letters
+  horizontal_margin: 0.10  # 10cm margin from cardboard edge (left/right)
+  vertical_margin: 0.06  # 6cm margin from cardboard edge (top/bottom, increased)
+  pen_retract_distance: 0.10  # 10cm retraction between letters (retracts upward in Z)
+  segment_duration: 1.0  # seconds per trajectory segment (for velocity calculation)
 
 # Simulation parameters
 simulation:
   gravity: 9.81  # m/s²
   timestep: 0.01  # seconds
   trajectory_points: 100  # points per letter
+  interpolation_points: 5  # points between trajectory waypoints for smooth animation (higher = smoother)
+  progress_report_interval: 50  # report progress every N waypoints
+
+# Visualization settings
+visualization:
+  # Figure settings
+  figure_width: 14  # inches
+  figure_height: 8  # inches
+
+  # 3D plot axis limits
+  x_limits: [-0.8, 0.8]  # meters
+  y_limits: [-0.2, 1.0]  # meters
+  z_limits: [0.0, 1.0]  # meters
+
+  # Animation settings
+  animation_interval: 30  # milliseconds between frames (lower = smoother but faster)
+  animation_fps: 30  # frames per second when saving animation
+
+  # Robot visualization
+  link_colors: ['darkblue', 'green', 'orange', 'red', 'purple', 'brown', 'pink']
+  base_linewidth: 8  # linewidth for first link
+  linewidth_decrement: 1  # reduce linewidth by this amount per link
+  min_linewidth: 2  # minimum linewidth
+  marker_size: 8  # joint marker size
+
+  # Torque plot settings
+  torque_plot_margin: 1.1  # multiply max torque by this for y-axis limit
+  torque_line_colors: ['steelblue', 'orange', 'green', 'red']
+
+# Inverse kinematics settings
+ik:
+  position_mask: [1, 1, 1, 0, 0, 0]  # constrain x,y,z position only (not orientation)
+  max_joint_step: 0.8  # maximum joint angle change between waypoints (radians) - balance between smoothness and flexibility

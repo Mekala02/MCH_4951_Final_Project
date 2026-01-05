@@ -131,19 +131,24 @@ class TrajectoryGenerator:
         """
         scaled_points = []
 
-        # Calculate letter width (assume 60% of height for proportions)
-        letter_width = self.letter_height * 0.6
+        # Calculate letter width from config
+        letter_width_ratio = self.config['writing']['letter_width_ratio']
+        letter_width = self.letter_height * letter_width_ratio
+
+        # Get margins from config
+        h_margin = self.config['writing']['horizontal_margin']
+        v_margin = self.config['writing']['vertical_margin']
 
         # Cardboard is vertical in XZ plane (Y is constant, facing the cardboard)
         # Starting X position for this letter (horizontal on cardboard)
-        start_x = self.cardboard_pos[0] - self.cardboard_w/2 + 0.1  # 10cm margin
+        start_x = self.cardboard_pos[0] - self.cardboard_w/2 + h_margin
         start_x += letter_index * (letter_width + self.letter_spacing)
 
         # Y is constant (distance from robot to cardboard)
         y_pos = self.cardboard_pos[1]
 
         # Z is vertical (height on cardboard)
-        base_z = self.cardboard_pos[2] - self.cardboard_h/2 + 0.05  # Bottom with 5cm margin
+        base_z = self.cardboard_pos[2] - self.cardboard_h/2 + v_margin
 
         for (norm_x, norm_y) in waypoints:
             # Map normalized coordinates to cardboard surface
@@ -175,12 +180,12 @@ class TrajectoryGenerator:
         pen_states = []
         letter_segments = []
 
-        # Start position (away from cardboard, centered)
-        # Retract in -Y direction (away from cardboard surface)
+        # Start position (above cardboard, centered)
+        # Retract in +Z direction (lift pen upward - only reachable direction)
         start_pos = [
             self.cardboard_pos[0],
-            self.cardboard_pos[1] - self.retract_dist,  # Pull back from cardboard
-            self.cardboard_pos[2]  # Center height
+            self.cardboard_pos[1],  # Y must stay at 0.55m (robot's only reachable Y)
+            self.cardboard_pos[2] + self.retract_dist  # Lift upward
         ]
         all_waypoints.append(start_pos)
         pen_states.append(False)
@@ -195,9 +200,9 @@ class TrajectoryGenerator:
 
             segment_start = len(all_waypoints)
 
-            # Move to start of letter (pen up - retracted in Y)
+            # Move to start of letter (pen up - lifted in +Z)
             first_point = waypoints[0].copy()
-            first_point[1] -= self.retract_dist  # Pull back from cardboard
+            first_point[2] += self.retract_dist  # Lift upward
             all_waypoints.append(first_point)
             pen_states.append(False)
 
@@ -210,9 +215,9 @@ class TrajectoryGenerator:
                 all_waypoints.append(point)
                 pen_states.append(True)
 
-            # Lift pen after letter (retract in -Y)
+            # Lift pen after letter (retract in +Z)
             last_point = waypoints[-1].copy()
-            last_point[1] -= self.retract_dist  # Pull back from cardboard
+            last_point[2] += self.retract_dist  # Lift upward
             all_waypoints.append(last_point)
             pen_states.append(False)
 
@@ -262,7 +267,8 @@ class TrajectoryGenerator:
                 interpolated_pen.append(pen)
 
                 # Simple velocity estimate (constant between waypoints)
-                vel = (end - start) * points_per_segment / 1.0  # Assume 1 second per segment
+                segment_time = self.config['writing']['segment_duration']
+                vel = (end - start) * points_per_segment / segment_time
                 interpolated_vel.append(vel)
 
                 # Zero acceleration for constant velocity segments

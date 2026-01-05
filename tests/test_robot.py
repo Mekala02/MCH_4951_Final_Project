@@ -15,7 +15,14 @@ print(f"DOF: {robot.config['robot']['dof']}")
 print(f"Workspace max reach: {robot.get_workspace_bounds()['max_reach']:.2f}m")
 
 # Test FK with home position
-home_position = [0, 0, 0.3, 0]  # [base, shoulder, elbow, wrist]
+num_joints = len(robot.robot.links)
+home_position = np.zeros(num_joints)
+# Set prismatic joint to mid-range
+for i, link in enumerate(robot.config['robot']['links']):
+    if link['joint_type'] == 'prismatic':
+        limits = link['limits']
+        home_position[i] = (limits[0] + limits[1]) / 2
+
 T = robot.forward_kinematics(home_position)
 end_pos = T.t
 print(f"\nHome position end effector: [{end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_pos[2]:.3f}]")
@@ -23,18 +30,17 @@ print(f"\nHome position end effector: [{end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_
 # Test IK
 target = [0.5, 0.0, 0.5]  # Try to reach a point in front
 print(f"\nTesting IK for target: {target}")
-try:
-    ik_result = robot.inverse_kinematics(target)
+ik_result = robot.inverse_kinematics(target)
+if ik_result is not None:
     print(f"IK solution: {ik_result}")
-
     # Verify with FK
     T_verify = robot.forward_kinematics(ik_result)
     reached_pos = T_verify.t
     print(f"Reached position: [{reached_pos[0]:.3f}, {reached_pos[1]:.3f}, {reached_pos[2]:.3f}]")
     error = np.linalg.norm(reached_pos - target)
     print(f"Position error: {error:.4f}m")
-except Exception as e:
-    print(f"IK failed: {e}")
+else:
+    print(f"IK failed: Target {target} is unreachable")
 
 # Test torque calculation
 print(f"\nStatic torques at home position:")

@@ -73,7 +73,7 @@ MCH_4951_Final_Project/
 │   ├── test_robot.py            # Test FK/IK
 │   └── test_simulation.py       # Test full simulation
 ├── docs/
-│   └── README.md                # This file
+│   └── README.md                # Additional documentation
 ├── requirements.txt             # Python dependencies
 ├── CLAUDE.md                    # Project plan and development notes
 └── venv/                        # Virtual environment

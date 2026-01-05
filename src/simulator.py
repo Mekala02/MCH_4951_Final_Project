@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 import yaml
+import os
 
 from robot_designer import RobotArm
 from trajectory_generator import TrajectoryGenerator
@@ -16,8 +17,12 @@ from trajectory_generator import TrajectoryGenerator
 class RobotSimulator:
     """Main simulator class"""
 
-    def __init__(self, config_path='config.yaml'):
+    def __init__(self, config_path=None):
         """Initialize simulator"""
+        if config_path is None:
+            # Default to config.yaml in the same directory as this script
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 

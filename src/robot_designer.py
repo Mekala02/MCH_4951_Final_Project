@@ -5,6 +5,7 @@ Handles robot chain creation, FK/IK, and torque calculations
 
 import numpy as np
 import yaml
+import os
 from ikpy.chain import Chain
 from ikpy.link import OriginLink, URDFLink
 
@@ -12,8 +13,12 @@ from ikpy.link import OriginLink, URDFLink
 class RobotArm:
     """4-DOF Robot Arm with kinematics and dynamics"""
 
-    def __init__(self, config_path='config.yaml'):
+    def __init__(self, config_path=None):
         """Initialize robot from config file"""
+        if config_path is None:
+            # Default to config.yaml in the same directory as this script
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 

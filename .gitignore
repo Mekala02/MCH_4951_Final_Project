@@ -1,13 +1,26 @@
+# Virtual environment
 venv/
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Python build
 .Python
 *.so
 *.egg
 *.egg-info/
 dist/
 build/
+
+# OS
 .DS_Store
+
+# Logs
 *.log
+
+# IDE
+.vscode/
+.idea/

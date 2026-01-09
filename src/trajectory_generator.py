@@ -162,33 +162,22 @@ class TrajectoryGenerator:
 
         return scaled_points
 
-    def generate_trajectory(self, letters='BAU'):
+    def generate_trajectory(self, letters):
         """
         Generate complete trajectory for writing letters
+        Includes travel waypoints to prevent going through cardboard
 
         Args:
-            letters: String of 3 letters to write
+            letters: String of letters to write
 
         Returns:
             dict with:
-                - waypoints: List of (x, y, z) positions
-                - pen_states: List of booleans (True = pen down, False = pen up)
+                - waypoints: List of (x, y, z) positions for each letter
                 - letter_segments: List of (start_idx, end_idx, letter) tuples
         """
         letter_paths = self.get_letter_paths()
         all_waypoints = []
-        pen_states = []
         letter_segments = []
-
-        # Start position (above cardboard, centered)
-        # Retract in +Z direction (lift pen upward - only reachable direction)
-        start_pos = [
-            self.cardboard_pos[0],
-            self.cardboard_pos[1],  # Y must stay at 0.55m (robot's only reachable Y)
-            self.cardboard_pos[2] + self.retract_dist  # Lift upward
-        ]
-        all_waypoints.append(start_pos)
-        pen_states.append(False)
 
         for letter_idx, letter in enumerate(letters.upper()):
             if letter not in letter_paths:
@@ -196,118 +185,98 @@ class TrajectoryGenerator:
                 continue
 
             # Get scaled waypoints for this letter
-            waypoints = self.scale_letter(letter_paths[letter], letter_idx)
+            letter_waypoints = self.scale_letter(letter_paths[letter], letter_idx)
 
             segment_start = len(all_waypoints)
 
-            # Move to start of letter (pen up - lifted in +Z)
-            first_point = waypoints[0].copy()
-            first_point[2] += self.retract_dist  # Lift upward
-            all_waypoints.append(first_point)
-            pen_states.append(False)
+            # If not the first letter, add travel waypoints from previous letter
+            if letter_idx > 0:
+                # Get the last point of previous letter
+                prev_last_point = all_waypoints[-1].copy()
 
-            # Lower pen to start position
-            all_waypoints.append(waypoints[0])
-            pen_states.append(True)
+                # Retract from previous letter (pull back in -Y direction)
+                retract_from_prev = prev_last_point.copy()
+                retract_from_prev[1] -= self.retract_dist  # Pull back away from cardboard
+                all_waypoints.append(retract_from_prev)
 
-            # Write the letter
-            for point in waypoints[1:]:
-                all_waypoints.append(point)
-                pen_states.append(True)
+                # Travel to next letter position (while retracted)
+                travel_to_next = letter_waypoints[0].copy()
+                travel_to_next[1] -= self.retract_dist  # Stay retracted
+                all_waypoints.append(travel_to_next)
 
-            # Lift pen after letter (retract in +Z)
-            last_point = waypoints[-1].copy()
-            last_point[2] += self.retract_dist  # Lift upward
-            all_waypoints.append(last_point)
-            pen_states.append(False)
+                # Approach the cardboard for the new letter
+                all_waypoints.append(letter_waypoints[0])
+
+                # Add remaining letter waypoints (skip first since we added it as approach)
+                for point in letter_waypoints[1:]:
+                    all_waypoints.append(point)
+            else:
+                # First letter - add all waypoints
+                for point in letter_waypoints:
+                    all_waypoints.append(point)
 
             segment_end = len(all_waypoints)
             letter_segments.append((segment_start, segment_end, letter))
 
-        # Return to start position
-        all_waypoints.append(start_pos)
-        pen_states.append(False)
-
         return {
             'waypoints': np.array(all_waypoints),
-            'pen_states': pen_states,
             'letter_segments': letter_segments
         }
 
     def interpolate_trajectory(self, trajectory, points_per_segment=20):
         """
-        Interpolate trajectory using RTB's Cartesian trajectory tools
-        Uses quintic (5th order) polynomials for smooth motion with continuous jerk
+        Interpolate trajectory letter-by-letter
+        SIMPLIFIED: Interpolate each letter separately
 
         Args:
             trajectory: Output from generate_trajectory()
             points_per_segment: Number of interpolation points between waypoints
 
         Returns:
-            dict with interpolated waypoints, velocities, and accelerations
+            dict with interpolated waypoints for each letter
         """
         from spatialmath import SE3
         import roboticstoolbox as rtb
 
         waypoints = trajectory['waypoints']
-        pen_states = trajectory['pen_states']
+        letter_segments = trajectory['letter_segments']
 
-        interpolated_points = []
-        interpolated_pen = []
-        interpolated_vel = []
-        interpolated_acc = []
+        all_interpolated_points = []
+        interpolated_letter_segments = []
 
-        # Use RTB's ctraj for smooth Cartesian interpolation between waypoints
-        for i in range(len(waypoints) - 1):
-            start_pos = waypoints[i]
-            end_pos = waypoints[i + 1]
-            pen = pen_states[i]
+        # Interpolate each letter separately
+        for start_idx, end_idx, letter in letter_segments:
+            letter_waypoints = waypoints[start_idx:end_idx]
 
-            # Create SE3 transforms (position only, fixed orientation)
-            T_start = SE3(start_pos[0], start_pos[1], start_pos[2])
-            T_end = SE3(end_pos[0], end_pos[1], end_pos[2])
+            interp_start = len(all_interpolated_points)
+            letter_interpolated = []
 
-            # Use RTB's ctraj for smooth interpolation
-            # Returns SE3 trajectory with quintic polynomial blending
-            traj = rtb.ctraj(T_start, T_end, t=points_per_segment)
+            # Interpolate between consecutive waypoints within this letter
+            for i in range(len(letter_waypoints) - 1):
+                start_pos = letter_waypoints[i]
+                end_pos = letter_waypoints[i + 1]
 
-            # Extract positions from SE3 trajectory
-            for T in traj:
-                pos = T.t  # Get translation vector
-                interpolated_points.append(pos)
-                interpolated_pen.append(pen)
+                # Create SE3 transforms
+                T_start = SE3(start_pos[0], start_pos[1], start_pos[2])
+                T_end = SE3(end_pos[0], end_pos[1], end_pos[2])
 
-            # Estimate velocities and accelerations from positions
-            # (RTB's ctraj doesn't directly return derivatives for Cartesian space)
-            segment_time = self.config['writing']['segment_duration']
-            for j in range(len(traj)):
-                if j == 0:
-                    vel = np.zeros(3)
-                    acc = np.zeros(3)
-                else:
-                    dt = segment_time / points_per_segment
-                    vel = (traj[j].t - traj[j-1].t) / dt
-                    if j == 1:
-                        acc = vel / dt
-                    else:
-                        prev_vel = (traj[j-1].t - traj[j-2].t) / dt
-                        acc = (vel - prev_vel) / dt
+                # Use RTB's ctraj for smooth interpolation
+                traj = rtb.ctraj(T_start, T_end, t=points_per_segment)
 
-                interpolated_vel.append(vel)
-                interpolated_acc.append(acc)
+                # Extract positions
+                for T in traj:
+                    letter_interpolated.append(T.t)
 
-        # Add final point
-        interpolated_points.append(waypoints[-1])
-        interpolated_pen.append(pen_states[-1])
-        interpolated_vel.append(np.zeros(3))
-        interpolated_acc.append(np.zeros(3))
+            # Add final waypoint of the letter
+            letter_interpolated.append(letter_waypoints[-1])
+
+            all_interpolated_points.extend(letter_interpolated)
+            interp_end = len(all_interpolated_points)
+            interpolated_letter_segments.append((interp_start, interp_end, letter))
 
         return {
-            'waypoints': np.array(interpolated_points),
-            'pen_states': interpolated_pen,
-            'velocities': np.array(interpolated_vel),
-            'accelerations': np.array(interpolated_acc),
-            'letter_segments': trajectory['letter_segments']
+            'waypoints': np.array(all_interpolated_points),
+            'letter_segments': interpolated_letter_segments
         }
 
 

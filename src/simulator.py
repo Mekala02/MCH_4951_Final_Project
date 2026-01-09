@@ -338,7 +338,8 @@ class RobotSimulator:
             # End-effector position is the last link position
             ee_pos = link_positions[-1]
 
-            # Draw links - simple visualization
+            # Draw links showing offset structure
+            # Shoulder link has L-shape: extension + perpendicular offset
             joint_names_list = list(self.config['motors'].keys())
             colors = ['steelblue', 'orange', 'green', 'red', 'purple']
 
@@ -346,13 +347,52 @@ class RobotSimulator:
                 p1 = link_positions[i]
                 p2 = link_positions[i+1]
 
-                # Label each link with joint name
-                if i < len(joint_names_list):
-                    joint_name = joint_names_list[i]
-                    color = colors[i % len(colors)]
+                # For shoulder (i=1), show prismatic joint + L-shaped offset
+                # p1 = shoulder_base_link, p2 = shoulder_link
+                if i == 1:
+                    # Draw prismatic joint extension (orange line)
                     ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                           'o-', linewidth=3, markersize=6, color=color,
-                           label=f'{joint_name}')
+                           'o-', linewidth=4, markersize=8, color='orange',
+                           label='shoulder_extend_joint')
+
+                    # Now draw the L-shaped offset structure within shoulder_link frame
+                    # Get shoulder_link's transform and rotation
+                    T_shoulder_link = self.robot.fkine(joints, end=self.robot.links[2])
+                    R_shoulder_link = T_shoulder_link.R
+
+                    # Corner: 0.3m in shoulder_link's local X from shoulder_link origin (p2)
+                    p_corner = p2 + R_shoulder_link @ np.array([0.3, 0, 0])
+                    # Elbow: use FK result directly
+                    p_elbow = link_positions[3]
+
+                    # Draw horizontal extension: shoulder_link to corner
+                    ax.plot([p2[0], p_corner[0]], [p2[1], p_corner[1]], [p2[2], p_corner[2]],
+                           'o-', linewidth=3, markersize=6, color='cyan',
+                           label='Shoulder extension')
+
+                    # Corner marker at 90° bend
+                    ax.scatter([p_corner[0]], [p_corner[1]], [p_corner[2]],
+                              c='red', s=80, marker='o', edgecolors='black', linewidths=2,
+                              zorder=10)
+
+                    # Draw perpendicular offset: corner to elbow
+                    ax.plot([p_corner[0], p_elbow[0]],
+                           [p_corner[1], p_elbow[1]],
+                           [p_corner[2], p_elbow[2]],
+                           'o-', linewidth=3, markersize=6, color='magenta',
+                           label='Offset (0.1m)')
+                elif i == 2:
+                    # Skip - shoulder to elbow is already drawn by offset visualization
+                    # The elbow position is already at the end of the magenta offset line
+                    pass
+                else:
+                    # Regular links
+                    if i < len(joint_names_list):
+                        joint_name = joint_names_list[i]
+                        color = colors[i % len(colors)]
+                        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                               'o-', linewidth=3, markersize=6, color=color,
+                               label=f'{joint_name}')
 
             # Show pen state with colored marker (ee_pos already computed above)
             pen_is_down = self.trajectory['pen_states'][frame]

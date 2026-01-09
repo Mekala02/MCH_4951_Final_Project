@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<robot name="cardboard_temporary">
+
+  <!-- Material Definitions -->
+  <material name="cardboard_color">
+    <color rgba="0.9 0.85 0.7 1.0"/>
+  </material>
+
+  <!-- Fixed base link (invisible anchor) -->
+  <link name="world">
+  </link>
+
+  <!-- Cardboard surface (vertical in XZ plane) -->
+  <link name="cardboard">
+    <visual>
+      <geometry>
+        <!-- Box: [width_X, depth_Y, height_Z] -->
+        <!-- Cardboard is 1.20m wide (X), 0.01m thick (Y), 0.60m tall (Z) -->
+        <box size="1.20 0.01 0.60"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="cardboard_color"/>
+    </visual>
+    <inertial>
+      <mass value="0.1"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+
+  <!-- Fixed joint to position cardboard in workspace -->
+  <!-- Position from config.yaml: [0.0, 0.55, 0.5] -->
+  <!-- NOTE: This is the CENTER of the cardboard -->
+  <!-- Cardboard front surface (facing robot) is at Y = 0.55 - 0.005 = 0.545 -->
+  <!-- Center is shifted forward by half thickness (0.005m) so front is at 0.55 -->
+  <joint name="cardboard_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="cardboard"/>
+    <!-- Position at center + half thickness forward in Y -->
+    <origin xyz="0.0 0.555 0.5" rpy="0 0 0"/>
+  </joint>
+
+</robot>

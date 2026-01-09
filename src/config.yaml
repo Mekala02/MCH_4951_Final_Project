@@ -6,18 +6,18 @@
 motors:
   base_joint:
     stall_torque: 100.0  # Nm
-  shoulder_joint:
-    stall_torque: 50.0  # Nm
+  shoulder_extend_joint:
+    stall_torque: 50.0  # Nm (prismatic - now on shoulder)
   elbow_joint:
     stall_torque: 40.0  # Nm
-  wrist_extend_joint:
+  wrist_joint:
     stall_torque: 20.0  # Nm
 
 # Workspace definition (cardboard position and size)
 workspace:
   cardboard_width: 1.20   # 120cm - PROJECT REQUIREMENT
   cardboard_height: 0.60  # 60cm - PROJECT REQUIREMENT
-  cardboard_position: [0.0, 0.595, 0.689]  # x, y, z center (96% success rate for full 60cm)
+  cardboard_position: [0.0, 0.55, 0.5]  # x, y, z - CENTER of vertical cardboard (X=horizontal, Y=depth, Z=height)
 
 # Letter writing parameters
 writing:

@@ -28,7 +28,7 @@ class RobotVisualizerGUI:
             self.config = yaml.safe_load(f)
 
         # Load robot directly from URDF using RTB
-        urdf_path = os.path.join(os.path.dirname(dirname(__file__)), 'config', 'robot.urdf')
+        urdf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'robot.urdf')
         self.robot = Robot.URDF(urdf_path)
         self.robot.gravity = [0, 0, -self.config['simulation']['gravity']]
         self.current_env = None

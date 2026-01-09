@@ -21,8 +21,8 @@ workspace:
 
 # Letter writing parameters
 writing:
-  letters: "RLN"  # 3 letters to write
-  letter_height: 0.48  # 48cm tall letters - fill cardboard with margins
+  letters: "RLN"  # 3 letters to write (HEART is a special shape)
+  letter_height: 0.5  # 48cm tall letters - fill cardboard with margins
   letter_width_ratio: 0.6  # Letter width as ratio of height
   letter_spacing: 0.05  # 5cm between letters
   horizontal_margin: 0.10  # 10cm margin from cardboard edge

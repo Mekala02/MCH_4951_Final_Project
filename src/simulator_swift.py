@@ -28,7 +28,7 @@ class SwiftSimulator:
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
 
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         # Load robot from URDF
@@ -68,7 +68,13 @@ class SwiftSimulator:
         joint_angles = []
         ik_errors = []
 
-        q_prev = np.array([0.0, 0.25, 0.0, -1.0])  # Initial guess
+        # Initial guess - use zeros for all joints (generic for any DOF)
+        n_joints = self.robot.n
+        q_prev = np.zeros(n_joints)
+        # Set reasonable starting position for prismatic joint if it exists
+        for i, link in enumerate(self.robot.links):
+            if i > 0 and hasattr(link, 'isprismatic') and link.isprismatic:
+                q_prev[i-1] = 0.12  # Mid-range for prismatic joint (link i connects joint i-1)
 
         progress_interval = self.config['simulation'].get('progress_report_interval', 50)
 
@@ -199,64 +205,76 @@ class SwiftSimulator:
         for joint_idx, interp in enumerate(interpolators):
             smooth_trajectory[:, joint_idx] = interp(t_frames)
 
-        dt = 0.02  # 20ms per frame (faster)
+        dt = 0.015  # 10ms per frame (2x faster)
 
         # First, draw the TARGET trajectory (desired letter path) in GREEN
         from spatialgeometry import Sphere, Box
         from spatialmath import SE3
         waypoints = self.trajectory['waypoints']
 
-        print("Drawing target trajectory (red lines for each letter)...")
+        print("Drawing target trajectory (red for letters, green for retractions)...")
 
-        # Draw red lines ONLY within each letter segment
-        for start_idx, end_idx, letter in letter_segments:
-            print(f"  Drawing letter '{letter}' (waypoints {start_idx} to {end_idx})")
-            line_count = 0
+        # Determine cardboard Y position for distinguishing letter strokes from retractions
+        cardboard_y = cardboard_pos[1]
+        retract_threshold = cardboard_y - 0.02  # 2cm tolerance
 
-            # Draw lines connecting waypoints within this letter using Box (thin rectangular prism)
-            for i in range(start_idx + 1, end_idx):
-                prev_wp = waypoints[i-1]
-                wp = waypoints[i]
+        # Draw ALL waypoint connections with color coding
+        red_count = 0
+        green_count = 0
 
-                direction = wp - prev_wp
-                length = np.linalg.norm(direction)
+        for i in range(1, len(waypoints)):
+            prev_wp = waypoints[i-1]
+            wp = waypoints[i]
 
-                if length > 0.001:
-                    line_count += 1
-                    midpoint = (prev_wp + wp) / 2
+            direction = wp - prev_wp
+            length = np.linalg.norm(direction)
 
-                    # Calculate rotation to align box with line direction
-                    # Box default orientation: length along X-axis
-                    x_axis = np.array([1, 0, 0])
-                    direction_norm = direction / length
+            if length > 0.001:
+                midpoint = (prev_wp + wp) / 2
 
-                    # Create rotation from x-axis to direction
-                    if np.allclose(direction_norm, x_axis):
-                        R = np.eye(3)
-                    elif np.allclose(direction_norm, -x_axis):
-                        R = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
+                # Determine color based on Y position (distance from robot)
+                # If both points are close to cardboard Y, it's a letter stroke (RED)
+                # If either point is retracted (smaller Y), it's a travel/retraction (GREEN)
+                avg_y = (prev_wp[1] + wp[1]) / 2
+                if avg_y > retract_threshold:
+                    color = [1, 0, 0]  # Red for letter strokes
+                    red_count += 1
+                else:
+                    color = [0, 1, 0]  # Green for retractions/travel
+                    green_count += 1
+
+                # Calculate rotation to align box with line direction
+                # Box default orientation: length along X-axis
+                x_axis = np.array([1, 0, 0])
+                direction_norm = direction / length
+
+                # Create rotation from x-axis to direction
+                if np.allclose(direction_norm, x_axis):
+                    R = np.eye(3)
+                elif np.allclose(direction_norm, -x_axis):
+                    R = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
+                else:
+                    # Rodrigues rotation formula
+                    axis = np.cross(x_axis, direction_norm)
+                    axis_len = np.linalg.norm(axis)
+                    if axis_len > 0.0001:
+                        axis = axis / axis_len
+                        angle = np.arccos(np.clip(np.dot(x_axis, direction_norm), -1, 1))
+                        K = np.array([[0, -axis[2], axis[1]],
+                                     [axis[2], 0, -axis[0]],
+                                     [-axis[1], axis[0], 0]])
+                        R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
                     else:
-                        # Rodrigues rotation formula
-                        axis = np.cross(x_axis, direction_norm)
-                        axis_len = np.linalg.norm(axis)
-                        if axis_len > 0.0001:
-                            axis = axis / axis_len
-                            angle = np.arccos(np.clip(np.dot(x_axis, direction_norm), -1, 1))
-                            K = np.array([[0, -axis[2], axis[1]],
-                                         [axis[2], 0, -axis[0]],
-                                         [-axis[1], axis[0], 0]])
-                            R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
-                        else:
-                            R = np.eye(3)
+                        R = np.eye(3)
 
-                    # Create transform
-                    T = SE3.Rt(R, midpoint)
+                # Create transform
+                T = SE3.Rt(R, midpoint)
 
-                    # Red box (thin line) - length along X, thin in Y and Z
-                    box = Box(scale=[length, 0.004, 0.004], pose=T, color=[1, 0, 0])
-                    env.add(box)
+                # Thin box line with color based on type
+                box = Box(scale=[length, 0.004, 0.004], pose=T, color=color)
+                env.add(box)
 
-            print(f"    Drew {line_count} line segments for letter '{letter}'")
+        print(f"  Drew {red_count} red segments (letters) and {green_count} green segments (retractions)")
 
         print("Target trajectory drawn. Starting robot animation...")
 

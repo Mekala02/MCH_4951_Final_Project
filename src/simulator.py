@@ -9,8 +9,8 @@ from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 import yaml
 import os
+from roboticstoolbox.robot.Robot import Robot
 
-from robot_designer import RobotArm
 from trajectory_generator import TrajectoryGenerator
 
 
@@ -26,7 +26,11 @@ class RobotSimulator:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-        self.robot = RobotArm(config_path)
+        # Load robot directly from URDF using RTB
+        urdf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'robot.urdf')
+        self.robot = Robot.URDF(urdf_path)
+        self.robot.gravity = [0, 0, -self.config['simulation']['gravity']]
+
         self.traj_gen = TrajectoryGenerator(self.config)
 
         self.trajectory = None
@@ -59,21 +63,27 @@ class RobotSimulator:
         torques = []
         ik_errors = []
 
-        # Initial guess: mid-range for prismatic joint
-        # Use len(links) not dof (6-DOF robot has 7 links with prismatic)
-        num_joints = len(self.config['robot']['links'])
+        # Initial guess: mid-range for all joints
+        num_joints = self.robot.n
         previous_joints = np.zeros(num_joints)
-        for i, link in enumerate(self.config['robot']['links']):
-            if link['joint_type'] == 'prismatic':
-                limits = link['limits']
-                previous_joints[i] = (limits[0] + limits[1]) / 2
+        if self.robot.qlim is not None:
+            for i in range(num_joints):
+                lower = self.robot.qlim[0, i]
+                upper = self.robot.qlim[1, i]
+                previous_joints[i] = (lower + upper) / 2
 
         print(f"Solving IK for {len(interp_traj['waypoints'])} waypoints...")
 
+        # Get IK configuration
+        from spatialmath import SE3
+        ik_mask = self.config['ik']['position_mask']
+
         for i, target in enumerate(interp_traj['waypoints']):
             try:
-                # Solve IK with previous solution as initial guess
-                joints = self.robot.inverse_kinematics(target, initial_guess=previous_joints)
+                # Solve IK with previous solution as initial guess using RTB directly
+                T_target = SE3(target[0], target[1], target[2])
+                ik_solution = self.robot.ikine_LM(T_target, q0=previous_joints, mask=ik_mask)
+                joints = ik_solution.q if ik_solution.success else None
 
                 # Check if IK succeeded
                 if joints is None:
@@ -84,8 +94,11 @@ class RobotSimulator:
                 if len(joint_angles) > 0:
                     # Handle angle wrapping for revolute joints (e.g., -π to π wrapping)
                     joints_unwrapped = joints.copy()
-                    for j, link in enumerate(self.config['robot']['links']):
-                        if link['joint_type'] != 'prismatic':
+                    # Check joint type from URDF via RTB
+                    for j in range(num_joints):
+                        # Get joint type from link (link j+1 represents joint j's type)
+                        is_prismatic = self.robot.links[j+1].isprismatic
+                        if not is_prismatic:
                             # Check if wrapping around ±π would give smaller difference
                             diff_raw = joints[j] - previous_joints[j]
                             diff_wrapped_pos = (joints[j] + 2*np.pi) - previous_joints[j]
@@ -119,7 +132,10 @@ class RobotSimulator:
                                 prev_target = interp_traj['waypoints'][i-1] if i > 0 else target
                                 interp_target = prev_target + alpha * (target - prev_target)
 
-                                step_joints = self.robot.inverse_kinematics(interp_target, initial_guess=temp_joints)
+                                # Use RTB's IK directly
+                                T_interp = SE3(interp_target[0], interp_target[1], interp_target[2])
+                                ik_step = self.robot.ikine_LM(T_interp, q0=temp_joints, mask=ik_mask)
+                                step_joints = ik_step.q if ik_step.success else None
 
                                 if step_joints is None:
                                     success = False
@@ -140,8 +156,8 @@ class RobotSimulator:
                     else:
                         joints = joints_unwrapped
 
-                # Verify solution
-                T = self.robot.forward_kinematics(joints)
+                # Verify solution using RTB's fkine directly
+                T = self.robot.fkine(joints)
                 reached = T.t  # RTB SE3 object, .t gives translation vector
 
                 error = np.linalg.norm(reached - target)
@@ -150,8 +166,29 @@ class RobotSimulator:
                 joint_angles.append(joints)
                 reached_positions.append(reached)
 
-                # Calculate static torques
-                static_torque = self.robot.compute_static_torques(joints)
+                # Calculate static torques using RTB's pay() method
+                # This properly accounts for gravity on each link at its center of mass
+                try:
+                    # Try gravload first (works for some robot types)
+                    static_torque = self.robot.gravload(joints)
+                except:
+                    # For URDF robots, compute link-by-link gravity torques
+                    # Use RTB's pay() method for each link's contribution
+                    static_torque = np.zeros(self.robot.n)
+                    g = np.array([0, 0, -self.config['simulation']['gravity']])
+
+                    # Sum gravity effects from all links
+                    for link_idx, link in enumerate(self.robot.links):
+                        if link.m is not None and link.m > 0:
+                            # Gravity force at link's center of mass
+                            F_gravity = link.m * g
+                            wrench = np.concatenate([F_gravity, [0, 0, 0]])
+
+                            # Use pay() to get joint torques for this link's gravity
+                            tau_link = self.robot.pay(W=wrench, q=joints, frame=link_idx)
+                            if tau_link is not None:
+                                static_torque += tau_link
+
                 torques.append(static_torque)
 
                 previous_joints = joints
@@ -169,14 +206,13 @@ class RobotSimulator:
                     torques.append(torques[-1])
                     ik_errors.append(999)
                 else:
-                    # Default configuration for failed IK
-                    num_joints = len(self.config['robot']['links'])
+                    # Default configuration for failed IK (mid-range)
                     default_joints = np.zeros(num_joints)
-                    # Set prismatic joint to mid-range
-                    for i, link in enumerate(self.config['robot']['links']):
-                        if link['joint_type'] == 'prismatic':
-                            limits = link['limits']
-                            default_joints[i] = (limits[0] + limits[1]) / 2
+                    if self.robot.qlim is not None:
+                        for k in range(num_joints):
+                            lower = self.robot.qlim[0, k]
+                            upper = self.robot.qlim[1, k]
+                            default_joints[k] = (lower + upper) / 2
                     joint_angles.append(default_joints)
                     reached_positions.append(target)
                     torques.append(np.zeros(num_joints))
@@ -200,7 +236,8 @@ class RobotSimulator:
         print("\nTorque Requirements:")
         torque_array = np.array(torques)
         # Get joint names dynamically from config
-        joint_names = [link['name'].capitalize() for link in self.config['robot']['links']]
+        # Get joint names from motors config
+        joint_names = list(self.config['motors'].keys())
 
         for i, joint_name in enumerate(joint_names):
             max_torque_req = np.max(np.abs(torque_array[:, i]))
@@ -265,8 +302,9 @@ class RobotSimulator:
 
         # Joint names for display
         # Get joint names dynamically from config
-        num_joints = self.config['robot']['dof']
-        joint_names = [link['name'].capitalize() for link in self.config['robot']['links']]
+        num_joints = self.robot.n
+        # Get joint names from motors config
+        joint_names = list(self.config['motors'].keys())
         torque_colors = self.config['visualization']['torque_line_colors']
 
         # Time array for torque plot
@@ -288,72 +326,35 @@ class RobotSimulator:
             # Get current joint configuration
             joints = self.trajectory['joint_angles'][frame]
 
-            # Draw robot - manually compute link positions from config
-            # Must match exact ETS from robot_designer.py
-            from spatialmath import SE3
+            # Compute link positions using RTB's forward kinematics
+            # Robot has len(robot.links) links including base_link
+            link_positions = []
 
-            link_configs = self.config['robot']['links']
-
-            # Compute each link transform (matching robot_designer.py ETS exactly)
-            link_positions = [np.array([0, 0, 0])]  # Base at origin
-            T = SE3()  # Start at world origin
-
-            # Build transforms dynamically - matches robot_designer.py exactly
-            for i, link_cfg in enumerate(link_configs):
-                # Fixed translations (before rotation)
-                if link_cfg.get('d', 0) != 0:
-                    T = T * SE3.Tz(link_cfg['d'])
-                if link_cfg.get('a', 0) != 0:
-                    T = T * SE3.Tx(link_cfg['a'])
-
-                # Offset (if specified)
-                if 'offset' in link_cfg and link_cfg['offset'] != 0:
-                    T = T * SE3.Tz(link_cfg['offset'])
-
-                # Fixed rotation (alpha - twist)
-                if link_cfg.get('alpha', 0) != 0:
-                    T = T * SE3.Rx(link_cfg['alpha'])
-
-                # Variable joint (MUST BE LAST)
-                is_prismatic = (link_cfg['joint_type'] == 'prismatic')
-                if is_prismatic:
-                    T = T * SE3.Tx(joints[i])  # Prismatic extension
-                else:
-                    # Determine rotation axis
-                    if 'Ry' in str(link_cfg.get('joint_type', '')):
-                        T = T * SE3.Ry(joints[i])
-                    elif 'Rx' in str(link_cfg.get('joint_type', '')):
-                        T = T * SE3.Rx(joints[i])
-                    else:
-                        T = T * SE3.Rz(joints[i])  # Default
-
+            # Get position of each link frame from URDF
+            for i in range(len(self.robot.links)):
+                T = self.robot.fkine(joints, end=self.robot.links[i])
                 link_positions.append(T.t)
 
-            # Draw links using config visualization settings
-            link_colors = self.config['visualization']['link_colors']
-            base_lw = self.config['visualization']['base_linewidth']
-            lw_decr = self.config['visualization']['linewidth_decrement']
-            min_lw = self.config['visualization']['min_linewidth']
-            marker_sz = self.config['visualization']['marker_size']
+            # End-effector position is the last link position
+            ee_pos = link_positions[-1]
+
+            # Draw links - simple visualization
+            joint_names_list = list(self.config['motors'].keys())
+            colors = ['steelblue', 'orange', 'green', 'red', 'purple']
 
             for i in range(len(link_positions) - 1):
                 p1 = link_positions[i]
                 p2 = link_positions[i+1]
 
-                if i < len(link_configs):
-                    link_name = link_configs[i]['name'].capitalize()
-                    link_type = link_configs[i]['joint_type'].capitalize()
-                    color = link_colors[i % len(link_colors)]
-                    linewidth = max(base_lw - i * lw_decr, min_lw)
-
+                # Label each link with joint name
+                if i < len(joint_names_list):
+                    joint_name = joint_names_list[i]
+                    color = colors[i % len(colors)]
                     ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                           'o-', linewidth=linewidth, markersize=marker_sz, color=color,
-                           label=f'{link_name} ({link_type})')
+                           'o-', linewidth=3, markersize=6, color=color,
+                           label=f'{joint_name}')
 
-            # End effector position
-            ee_pos = link_positions[-1]
-
-            # Show pen state with colored marker
+            # Show pen state with colored marker (ee_pos already computed above)
             pen_is_down = self.trajectory['pen_states'][frame]
             pen_color = 'red' if pen_is_down else 'green'
             pen_label = 'Pen DOWN (writing)' if pen_is_down else 'Pen UP (moving)'
@@ -363,10 +364,9 @@ class RobotSimulator:
 
             # Add trace only when pen is down
             if show_trace and pen_is_down:
-                pos = self.trajectory['reached_positions'][frame]
-                trace_x.append(pos[0])
-                trace_y.append(pos[1])
-                trace_z.append(pos[2])
+                trace_x.append(ee_pos[0])
+                trace_y.append(ee_pos[1])
+                trace_z.append(ee_pos[2])
 
             if len(trace_x) > 0:
                 ax.plot(trace_x, trace_y, trace_z, 'b-', linewidth=3, label='Pen trace (drawn letters)')
@@ -424,17 +424,22 @@ class RobotSimulator:
         print("ROBOT ARM SIMULATION REPORT")
         print("="*60)
 
-        print(f"\nRobot: {self.config['robot']['name']}")
+        print(f"\nRobot: {self.robot.name}")
         print(f"Letters: {self.config['writing']['letters']}")
 
         print("\n--- Requirements Check ---")
-        print(f"[OK] DOF: {self.config['robot']['dof']} (minimum 4)")
+        print(f"[OK] DOF: {self.robot.n} (minimum 4)")
         print(f"[OK] 3D Workspace: Yes")
 
-        # Check joint types
-        joint_types = [link['joint_type'] for link in self.config['robot']['links']]
-        revolute_count = joint_types.count('revolute')
-        prismatic_count = joint_types.count('prismatic')
+        # Check joint types from URDF via RTB
+        # Links 1 to n represent the joints (link 0 is base)
+        revolute_count = 0
+        prismatic_count = 0
+        for i in range(1, len(self.robot.links)):
+            if self.robot.links[i].isprismatic:
+                prismatic_count += 1
+            elif self.robot.links[i].isrevolute:
+                revolute_count += 1
 
         print(f"[OK] Revolute joints: {revolute_count} (minimum 2)")
         print(f"[OK] Prismatic joints: {prismatic_count} (minimum 1, not first link)")
@@ -446,8 +451,9 @@ class RobotSimulator:
 
         print(f"\n--- Joint Torque Requirements ---")
         # Get joint names dynamically from config
-        num_joints = self.config['robot']['dof']
-        joint_names = [link['name'].capitalize() for link in self.config['robot']['links']]
+        num_joints = self.robot.n
+        # Get joint names from motors config
+        joint_names = list(self.config['motors'].keys())
         for i, joint_name in enumerate(joint_names):
             max_req = np.max(np.abs(self.trajectory['torques'][:, i]))
             avg_req = np.mean(np.abs(self.trajectory['torques'][:, i]))

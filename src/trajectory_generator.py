@@ -236,7 +236,8 @@ class TrajectoryGenerator:
 
     def interpolate_trajectory(self, trajectory, points_per_segment=20):
         """
-        Interpolate trajectory for smooth motion
+        Interpolate trajectory using RTB's Cartesian trajectory tools
+        Uses quintic (5th order) polynomials for smooth motion with continuous jerk
 
         Args:
             trajectory: Output from generate_trajectory()
@@ -245,34 +246,55 @@ class TrajectoryGenerator:
         Returns:
             dict with interpolated waypoints, velocities, and accelerations
         """
+        from spatialmath import SE3
+        import roboticstoolbox as rtb
+
         waypoints = trajectory['waypoints']
         pen_states = trajectory['pen_states']
 
-        # Simple linear interpolation between waypoints
         interpolated_points = []
         interpolated_pen = []
         interpolated_vel = []
         interpolated_acc = []
 
+        # Use RTB's ctraj for smooth Cartesian interpolation between waypoints
         for i in range(len(waypoints) - 1):
-            start = waypoints[i]
-            end = waypoints[i + 1]
+            start_pos = waypoints[i]
+            end_pos = waypoints[i + 1]
             pen = pen_states[i]
 
-            # Linear interpolation
-            for j in range(points_per_segment):
-                t = j / points_per_segment
-                point = start + t * (end - start)
-                interpolated_points.append(point)
+            # Create SE3 transforms (position only, fixed orientation)
+            T_start = SE3(start_pos[0], start_pos[1], start_pos[2])
+            T_end = SE3(end_pos[0], end_pos[1], end_pos[2])
+
+            # Use RTB's ctraj for smooth interpolation
+            # Returns SE3 trajectory with quintic polynomial blending
+            traj = rtb.ctraj(T_start, T_end, t=points_per_segment)
+
+            # Extract positions from SE3 trajectory
+            for T in traj:
+                pos = T.t  # Get translation vector
+                interpolated_points.append(pos)
                 interpolated_pen.append(pen)
 
-                # Simple velocity estimate (constant between waypoints)
-                segment_time = self.config['writing']['segment_duration']
-                vel = (end - start) * points_per_segment / segment_time
-                interpolated_vel.append(vel)
+            # Estimate velocities and accelerations from positions
+            # (RTB's ctraj doesn't directly return derivatives for Cartesian space)
+            segment_time = self.config['writing']['segment_duration']
+            for j in range(len(traj)):
+                if j == 0:
+                    vel = np.zeros(3)
+                    acc = np.zeros(3)
+                else:
+                    dt = segment_time / points_per_segment
+                    vel = (traj[j].t - traj[j-1].t) / dt
+                    if j == 1:
+                        acc = vel / dt
+                    else:
+                        prev_vel = (traj[j-1].t - traj[j-2].t) / dt
+                        acc = (vel - prev_vel) / dt
 
-                # Zero acceleration for constant velocity segments
-                interpolated_acc.append(np.zeros(3))
+                interpolated_vel.append(vel)
+                interpolated_acc.append(acc)
 
         # Add final point
         interpolated_points.append(waypoints[-1])
@@ -292,8 +314,10 @@ class TrajectoryGenerator:
 if __name__ == '__main__':
     # Test trajectory generation
     import yaml
+    import os
 
-    with open('config.yaml', 'r') as f:
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+    with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
     traj_gen = TrajectoryGenerator(config)

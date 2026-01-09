@@ -1,27 +1,29 @@
 # Robot Arm Simulator - MCH 4951 Final Project
 
-A Python-based 4-DOF robot arm simulator that writes letters on a virtual cardboard using forward/inverse kinematics and dynamics validation.
+A Python-based 4-DOF robot arm simulator that writes letters on a 60×120cm virtual cardboard using forward/inverse kinematics and dynamics validation.
 
 ## Features
 
-- 4-DOF robot arm with real DH parameters
-- Forward and inverse kinematics (Robotics Toolbox)
-- Trajectory generation for letter writing
-- Static and dynamic torque calculations
+- Generic URDF-based robot loading (works with any URDF robot)
+- Forward and inverse kinematics using Robotics Toolbox Python
+- Trajectory generation for letter writing with smooth interpolation
+- Static torque calculations with per-link gravity analysis
 - Motor feasibility validation
-- 3D matplotlib animation
-- Configurable via YAML
+- 3D matplotlib animation with real-time visualization
+- Fully configurable via YAML
 
-## Requirements
+## Project Requirements (MCH 4951)
 
-All requirements met per MCH 4951 specs:
-- 4 independent links (4 DOF)
-- 3D workspace (volumetric)
-- 1 translational joint (prismatic elbow)
-- 2+ rotational joints (base, shoulder, wrist)
-- 1+ offset (shoulder offset)
-- Real materials (aluminum, steel)
-- Real motors (Dynamixel servos)
+- 4+ DOF robot (independent links)
+- 3D workspace (volumetric, not planar)
+- ≥1 translational joint (prismatic wrist extension)
+- ≥2 rotational joints (revolute base, shoulder, elbow)
+- ≥1 offset (shoulder offset)
+- Real materials (aluminum/steel with actual densities)
+- Real motors (servo specifications with torque limits)
+- Write 3 letters on 60×120cm cardboard
+- Pen retracts between letters
+- Calculate reachability, static/dynamic torques, feasibility
 
 ## Installation
 
@@ -32,98 +34,124 @@ python -m venv venv
 # Activate (Windows)
 venv\Scripts\activate
 
+# Activate (Linux/Mac)
+source venv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-### Quick Test (No GUI)
-```bash
-venv/Scripts/python.exe tests/test_simulation.py
-```
-
-### Full Simulation with Animation
+### Run Main Simulation
 ```bash
 venv/Scripts/python.exe src/simulator.py
 ```
 
-### Individual Components
+This will:
+1. Load the robot from URDF
+2. Generate trajectory for "RLN" letters
+3. Solve inverse kinematics for all waypoints
+4. Calculate torques at each configuration
+5. Display 3D animation with pen trace
+6. Show real-time torque plots
 
-**Test Robot FK/IK:**
-```bash
-venv/Scripts/python.exe tests/test_robot.py
-```
+### Test Components Individually
 
-**Test Trajectory Generation:**
+**Test trajectory generation:**
 ```bash
 venv/Scripts/python.exe src/trajectory_generator.py
+```
+
+**Visualize trajectory (debug tool):**
+```bash
+venv/Scripts/python.exe examples/visualize_trajectory.py
+```
+
+**Compare target vs reached positions:**
+```bash
+venv/Scripts/python.exe examples/compare_trajectory_vs_ik.py
+```
+
+**Interactive robot GUI:**
+```bash
+venv/Scripts/python.exe examples/robot_visualizer_gui.py
 ```
 
 ## Project Structure
 
 ```
 MCH_4951_Final_Project/
+├── config/
+│   └── robot.urdf              # Robot geometry, masses, inertia, joint limits
 ├── src/
-│   ├── config.yaml              # Robot DH parameters, materials, motors
-│   ├── robot_designer.py        # Robot class, FK/IK, dynamics
-│   ├── trajectory_generator.py  # Letter path generation
-│   └── simulator.py             # Main animation loop
-├── tests/
-│   ├── test_robot.py            # Test FK/IK
-│   └── test_simulation.py       # Test full simulation
-├── docs/
-│   └── README.md                # Additional documentation
-├── requirements.txt             # Python dependencies
-├── CLAUDE.md                    # Project plan and development notes
-└── venv/                        # Virtual environment
+│   ├── config.yaml             # Motor specs, workspace, writing params
+│   ├── simulator.py            # Main simulation loop and IK solver
+│   └── trajectory_generator.py # Letter path generation
+├── examples/
+│   ├── visualize_trajectory.py # Debug: view generated waypoints
+│   ├── compare_trajectory_vs_ik.py # Debug: compare target vs reached
+│   └── robot_visualizer_gui.py # Interactive robot control GUI
+├── requirements.txt            # Python dependencies
+├── CLAUDE.md                   # Development instructions
+└── README.md                   # This file
 ```
 
 ## Configuration
 
-Edit `src/config.yaml` to modify:
-- Robot DH parameters (link lengths, offsets, twists)
-- Material properties (density, cost)
-- Motor specifications (torque, speed limits)
-- Letters to write
-- Workspace dimensions
+### Robot Configuration (config/robot.urdf)
+Define robot geometry using standard URDF format:
+- Link lengths, masses, inertia tensors
+- Joint types (revolute, prismatic), axes, limits
+- Material properties
 
-## Current Limitations
+### Application Configuration (src/config.yaml)
+- Motor torque specifications
+- Workspace dimensions and cardboard position
+- Letter parameters (height, spacing, margins)
+- IK settings (mask, max joint step)
+- Visualization settings
 
-The current robot configuration has:
-1. **High IK errors** (~0.57m average) - robot geometry may need optimization
-2. **Motor torque exceedances** - all motors exceed limits, need stronger motors or lighter links
+## Current Performance
 
-## Optimization Suggestions
+- **IK Success Rate**: 100% (111/111 waypoints)
+- **Average IK Error**: 0.0000m
+- **Letters**: 48cm tall on 60×120cm cardboard
+- **Torque Requirements**:
+  - Base joint: 0.00 Nm (no gravity effect on vertical axis)
+  - Shoulder joint: ~56 Nm (max)
+  - Elbow joint: ~50 Nm (max)
+  - Wrist extension: ~39 Nm (max)
 
-To improve feasibility:
-1. Increase motor torque ratings (use larger Dynamixel models)
-2. Reduce link masses (thinner aluminum tubes)
-3. Shorten link lengths for better reachability
-4. Adjust cardboard position closer to base
+## Technical Details
 
-## Output Example
+### Robotics Toolbox Integration
+- Robot loaded via `Robot.URDF()`
+- Forward kinematics: `robot.fkine(q)`
+- Inverse kinematics: `robot.ikine_LM(T, q0, mask)`
+- Gravity torques: `robot.pay(W, q, frame)` per-link
+- Cartesian interpolation: `rtb.ctraj(T1, T2, t)`
 
-```
-Generating trajectory for 'BAU'...
-Solving IK for 481 waypoints...
+### Trajectory Generation
+1. Generate letter paths (normalized 0-1 coordinates)
+2. Scale to cardboard dimensions with margins
+3. Add pen retraction moves between letters
+4. Interpolate with quintic polynomials (smooth velocity/acceleration)
 
-=== Trajectory Analysis ===
-Average IK error: 0.5678m
-Max IK error: 0.8750m
-
-Torque Analysis:
-  base_motor: max 19.52 Nm / 10.00 Nm [EXCEEDED]
-  shoulder_motor: max 14.24 Nm / 6.00 Nm [EXCEEDED]
-```
+### IK Solving
+- Position-only constraint (orientation free)
+- Uses previous solution as initial guess for continuity
+- Handles angle wrapping for revolute joints
+- Detects and smooths large joint jumps
 
 ## Tech Stack
 
-- **Robotics Toolbox**: Forward/inverse kinematics and dynamics
-- **NumPy/SciPy**: Numerical calculations and trajectory interpolation
-- **matplotlib**: 3D visualization and animation
-- **PyYAML**: Configuration management
+- **Robotics Toolbox Python**: Kinematics, dynamics, URDF parsing
+- **Spatial Math Python**: SE3 transforms and rotations
+- **NumPy/SciPy**: Numerical calculations
+- **Matplotlib**: 3D visualization and animation
+- **PyYAML**: Configuration file parsing
 
 ## License
 
-Educational project for MCH 4951.
+Educational project for MCH 4951 Robotics.

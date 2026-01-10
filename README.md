@@ -2,6 +2,24 @@
 
 A Python-based 4-DOF robot arm simulator that writes letters on a 60×120cm virtual cardboard using forward/inverse kinematics and dynamics validation.
 
+<p align="center">
+  <img src="images/1.png" alt="Robot Structure" width="600">
+  <br>
+  <em>4-DOF robot arm with coordinate frames showing joint axes and link geometry</em>
+</p>
+
+<p align="center">
+  <img src="images/2.png" alt="Trajectory Visualization" width="600">
+  <br>
+  <em>Color-coded trajectory: Red lines show pen writing, green lines show pen retraction between letters</em>
+</p>
+
+<p align="center">
+  <img src="images/3.png" alt="Final Result" width="600">
+  <br>
+  <em>Completed "RLN" letter sequence on virtual cardboard</em>
+</p>
+
 ## Features
 
 - Generic URDF-based robot loading (works with any URDF robot)
@@ -92,6 +110,10 @@ MCH_4951_Final_Project/
 │   ├── visualize_trajectory.py # Debug: view generated waypoints
 │   ├── compare_trajectory_vs_ik.py # Debug: compare target vs reached
 │   └── robot_visualizer_gui.py # Interactive robot control GUI
+├── images/
+│   ├── 1.png                   # Robot structure visualization
+│   ├── 2.png                   # Trajectory with color-coded paths
+│   └── 3.png                   # Final letter writing result
 ├── requirements.txt            # Python dependencies
 ├── CLAUDE.md                   # Development instructions
 └── README.md                   # This file
@@ -112,16 +134,33 @@ Define robot geometry using standard URDF format:
 - IK settings (mask, max joint step)
 - Visualization settings
 
-## Current Performance
+## Robot Specifications
 
+### Physical Configuration
+- **Total DOF**: 4 (base revolute, shoulder revolute, elbow revolute, wrist prismatic)
+- **Workspace**: 3D volumetric workspace reaching 60x120cm cardboard
+- **Materials**: Aluminum links with steel base (real material densities)
+- **End Effector**: Prismatic wrist extension with pen holder
+
+### Performance Metrics
 - **IK Success Rate**: 100% (111/111 waypoints)
-- **Average IK Error**: 0.0000m
-- **Letters**: 48cm tall on 60×120cm cardboard
-- **Torque Requirements**:
-  - Base joint: 0.00 Nm (no gravity effect on vertical axis)
-  - Shoulder joint: ~56 Nm (max)
-  - Elbow joint: ~50 Nm (max)
-  - Wrist extension: ~39 Nm (max)
+- **Average IK Error**: < 0.0001m
+- **Letters**: 48cm tall "RLN" on 60x120cm cardboard
+- **Pen Retraction**: Automatic retraction between letters to avoid unwanted marks
+
+### Torque Analysis
+Based on static analysis with per-link gravity calculations:
+- **Base Joint (Revolute)**: 0.00 Nm (vertical axis, no gravity component)
+- **Shoulder Joint (Revolute)**: ~56 Nm maximum
+- **Elbow Joint (Revolute)**: ~50 Nm maximum
+- **Wrist Extension (Prismatic)**: ~39 N maximum force
+
+### Motor Specifications
+Selected motors based on calculated torque requirements with safety margins:
+- **Base**: Servo motor (low torque requirement)
+- **Shoulder**: High-torque servo (60+ Nm rating)
+- **Elbow**: High-torque servo (55+ Nm rating)
+- **Wrist**: Linear actuator (50+ N force rating)
 
 ## Technical Details
 
